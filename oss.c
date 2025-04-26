@@ -163,7 +163,7 @@ void cleanup_shared_memory() {
 
 //function for resourceTable
 void initializeResourceTable() {
-	for (int i =0; i < NUM_RESOURCES; i++) {
+	for (int i = 0; i < NUM_RESOURCES; i++) {
 		resourceTable[i].totalInstances = NUM_INSTANCES;
 		resourceTable[i].availableInstances = NUM_INSTANCES;
 		for (int j = 0; j < 18; j++) {

@@ -17,7 +17,7 @@
 struct oss_message {
 	long mtype; //PID of the destination process (oss in this case)
 	int command; //Type of request 
-	int resourceID; //The ID of the resource being requested or released
+	int resourceId; //The ID of the resource being requested or released
 };
 
 struct worker_message {
@@ -30,7 +30,7 @@ struct worker_message {
 #define MAX_RESOURCE 5
 #define MAX_INSTANCES 10
 #define REQUEST_RESOURCE 1
-#define RELEASE _RESOURCE 2
+#define RELEASE_RESOURCE 2
 #define TERMINATE 3 // add termiante command
 
 
@@ -51,7 +51,7 @@ int attach_shared_memory() {
 		return 1;
 	}
 
-	simClock = (SimulatedClock *)shamt(shmid, NULL, 0);
+	simClock = (SimulatedClock *)shmat(shmid, NULL, 0);
 	if (simClock == (SimulatedClock *) -1) {
 		perror("shmat");
 		return 1;
@@ -100,7 +100,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	//2. Attach to the message queue
-	msquid = msgget(MSGKEY, 0); //No IPC_CREAT, just attach
+	msqid = msgget(MSGKEY, 0); //No IPC_CREAT, just attach
 	if (msqid == -1) {
 		perror("msgget");
 		shmdt(simClock);
@@ -125,11 +125,11 @@ int main(int argc, char *argv[]) {
 
 		//c. Randomly decide to request or release a resource
 		int action = rand() % 2; // 0 for request, 1 for release
-		int resourceID;
+		int resourceId;
 		
-		stuct oss_message oss_msg;
+		struct oss_message oss_msg;
 		oss_msg.mtype = getppid(); //send message to oss
-		oss_msg.resourceID = rand() % MAX_RESOURCES; //Choose a random resource
+		oss_msg.resourceId = rand() % MAX_RESOURCES; //Choose a random resource
 
 		if (action == 0) {
 			//request a resource
