@@ -27,7 +27,7 @@ struct worker_message {
 
 //Constants 
 #define MSGKEY 12345
-#define MAX_RESOURCE 5
+#define MAX_RESOURCES 5
 #define MAX_INSTANCES 10
 #define REQUEST_RESOURCE 1
 #define RELEASE_RESOURCE 2
@@ -114,94 +114,84 @@ int main(int argc, char *argv[]) {
 	}
 
 	//4. Main loop
+	unsigned int last_termination_check_sec = simClock->seconds;
+	unsigned int last_termination_check_ns = simClock->nanoseconds;
+
 	while (1) {
-		//a. Get current time
-		unsigned int currentSeconds = simClock->seconds;
-		unsigned int currentNanoseconds = simClock->nanoseconds;
-
-		//b. Generate random time within bound B
+		//a. Sleep for a randome time within bound B (simulate work)
 		int sleepTime = rand() % bound_B;
-		usleep(sleepTime); //sleep
+		usleep(sleepTime); //sleep in microseconds
 
-		//c. Randomly decide to request or release a resource
+		//b. Randomly decide to request or release a resource
 		int action = rand() % 2; // 0 for request, 1 for release
-		int resourceId;
-		
+		int resourceId = rand() % MAX_RESOURCES;
 		struct oss_message oss_msg;
 		oss_msg.mtype = getppid(); //send message to oss
-		oss_msg.resourceId = rand() % MAX_RESOURCES; //Choose a random resource
+		oss_msg.resourceId = resourceId;
 
 		if (action == 0) {
 			//request a resource
-			resourceId = oss_msg.resourceId;
 			if (myResources[resourceId] < MAX_INSTANCES) { //can only request if less than max instances
 				oss_msg.command = REQUEST_RESOURCE;
 				printf("Process %d requesting resource %d at time %u:%u\n",
-					getpid(), oss_msg.resourceId, currentSeconds, currentNanoseconds);
+					getpid(), resourceId, simClock->seconds, simClock->nanoseconds);
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (request)");
-					//consider what to do on error: exit, retry, etc. For now, exit
-					shmdt(simClock);
-					exit(1);
+					break;
 				}
 
-				// d. Wait for a response from oss (for resource requests)
+				//Wait for a response from oss (for resource requests)
 				struct worker_message worker_response;
 				if (msgrcv(msqid, &worker_response, sizeof(worker_response) - sizeof(long), getpid(), 0) == -1) {
 					perror("msgrcv (response)");
-					shmdt(simClock);
-					exit(1);
+					break;
 				}
 
-				if (worker_response.status == 0) {
-					printf("Process %d granted resource %d\n", getpid(), oss_msg.resourceId);
-					myResources[oss_msg.resourceId]++; //increment resource count
+				if (worker_response.status == 1) {
+					printf("Process %d granted resource %d\n", getpid(), resourceId);
+					myResources[resourceId]++; //increment resource count
 				} else {
-					printf("Process %d denied resource %d\n", getpid(), oss_msg.resourceId);
+					printf("Process %d denied resource %d\n", getpid(), resourceId);
 					//Optionally handle denial (e.g., wait and retry, request a different resource)
 				}
 			}
 		} else {
 			//Release a resource
-			resourceId = oss_msg.resourceId;
 			if (myResources[resourceId] > 0) {
 				oss_msg.command = RELEASE_RESOURCE;
 				printf("Process %d releasing resource %d at time %u:%u\n",
-					getpid(), oss_msg.resourceId, currentSeconds, currentNanoseconds);
+					getpid(), resourceId, simClock->seconds, simClock->nanoseconds);
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1 {
 					perror("msgsnd (release)");
-					shmdt(simClock);
-					exit(1);
+					break;
 				}
-				myResources[oss_msg.resourceId]--;
-			}
-
-			//e. Check if it should terminate (every 250ms)
-			if ((currentNanoseconds % 250000000) == 0) { //check every 250ms
-				if (currentSeconds > 1 && ((double)rand() / RAND_MAX) < 0.15) {
-					//send message to oss to terminate
-					oss_msg.command = TERMINATE;
-					oss_msg.mtype = getppid();
-					if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
-						perror("msgsnd (terminate)");
-						shmdt(simClock);
-						exit(1);
-					}
-					printf("Process %d terminating\n", getpid());
-					break; //Exit the main loop
-				}
-			}
-
-			//f. Update simulated clock (simplified for this example)
-			simClock->nanoseconds += 1000000; //Increment by 1ms
-			if (simClock->nanoseconds >= 1000000000) {	
-				simClock->seconds++;
-				simClock->nanoseconds -= 1000000000;
+				myResources[resourceId]--;
 			}
 		}
-		
-		//5. Detach from shared memory and message queue
-		shmdt(simClock);
-		return 0;
+
+		//c. Check if it should terminate (every 250ms)
+		unsigned int elapsed_sec = simClock->seconds - last_termination_check_sec;
+		unsigned int elapsed_ns = (simClock->nanoseconds >= last_termination_check_ns)
+			? (simClock->nanoseconds - last_termination_check_ns)
+			: (1000000000 - last_termination_check_ns + simClock->nanoseconds);
+		if (elapsed_sec > 0 || elapsed_ns >= 250000000) {
+			last_termination_check_sec = simClock->seconds;
+			last_termination_check_ns = simClock->nanoseconds;
+			if (simClock->seconds > 1 && ((double)rand() / RAND_MAX) < 0.15) {
+				//send message to oss to terminate
+				oss_msg.command = TERMINATE;
+				oss_msg.mtype = getppid();
+				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
+					perror("msgsnd (terminate)");
+				}
+				printf("Process %d terminating\n", getpid());
+				break;
+			}
+		}
+	}
+
+	//Detach from shared memory and message queue
+	shmdt(simClock);
+	return 0;
 }
 
