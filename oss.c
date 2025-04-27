@@ -12,6 +12,8 @@
 #include <errno.h>
 #include <sys/msg.h> //for message queues
 #include <signal.h>
+#include <stdbool.h> //Include for bool type
+#include <sys/wait.h> //Include for waitpid()
 
 //Constants (These could also be in a header file)
 #define MSGKEY 12345
@@ -23,29 +25,24 @@
 #define RELEASE_RESOURCE 2
 #define TERMINATE 3
 
-//Structures
-typedef struct {
-	unsigned int seconds;
-	unsigned int nanoseconds;
-} SimulatedClock;
-
-typedef struct {
-	int totalInstances;
-	int availableInstances;
-	int allocated[18]; //Instances allocated to each process
-} ResourceDescriptor;
-
 //Global Variables
 SimulatedClock *simClock;
 int shmid;
 int msqid;
 ResourceDescriptor resourceTable[NUM_RESOURCES];
 PCB processTable[18];
+int available[NUM_RESOURCES]; //available resources
+int max[18][NUM_RESOURCES]; //max demand of each process
+int allocation[18][NUM_RESOURCES]; //resources currently allocated to each process
+int need[18][NUM_RESOURCES]; //remaining need of each process
+
+//Function to check if the system is in a safe state
+bool isSafe(int processId, int resourceId, int request);
 
 // Function to initialize the resource table
 void initializeResourceTable() {
 	for (int i = 0; i < NUM_RESOURCES; i++) {
-		resourceTable[i].totalInstances = NUM_INSTANCES
+		resourceTable[i].totalInstances = NUM_INSTANCES;
 		resourceTable[i].availableInstances = NUM_INSTANCES;
 		for (int j = 0; j < 18; j++) {
 			resourceTable[i].allocated[j] = 0;
@@ -68,12 +65,15 @@ int handleResourceRequest(int pid, int resourceId) {
 		return -1; //Process not found
 	}
 
-	if (resourceTable[resourceId].availableInstances > 0) {
+	//Check if the request can be granted safely
+	if (isSafe(pid, resourceId, 1)) { //assuming each request is for 1 instance
 		resourceTable[resourceId].availableInstances--;
 		resourceTable[resourceId].allocated[processIndex]++;
+		allocation[processIndex][resourceId]++; //update allocation
+		need[processIndex][resourceId]--; //update need
 		return 1; //Granted
 	} else {
-		return 0; //denied
+		return 0; //Denied (unsafe state)
 	}
 }
 
@@ -161,20 +161,123 @@ void cleanup_shared_memory() {
 	}
 }
 
-//function for resourceTable
-void initializeResourceTable() {
+//Function to check if the system is in a safe state
+bool isSafe(int processId, int resourceId, int request) {
+	int work[NUM_RESOURCES]; //available resources
+	bool finish[18]; //indicates if a process can finish
+	int temp_allocation[18][NUM_RESOURCES]; //temporary allocation matrix
+
+	//1. Initialize work and finish
 	for (int i = 0; i < NUM_RESOURCES; i++) {
-		resourceTable[i].totalInstances = NUM_INSTANCES;
-		resourceTable[i].availableInstances = NUM_INSTANCES;
-		for (int j = 0; j < 18; j++) {
-			resourceTable[i].allocated[j] = 0; //Initially, no resources are allocated
+		work[i] = available[i];
+	}
+	for (int i = 0; i < 18; i++) {
+		finish[i] = false;
+	}
+
+	//2. Simulate the allocation
+	for (int i = 0; i < NUM_RESOURCES; i++) {
+		work[i] -= request;
+	}
+
+	//2.5 Copy allocation to temp_allocation
+	for (int i = 0; i < 18; i++) {
+		for (int j = 0; j < NUM_RESOURCES; j++) {
+			temp_allocation[i][j] = allocation[i][j];
 		}
 	}
+
+	int processIndex = -1;
+	for (int i = 0; i < 18; i++) {
+		if (processTable[i].pid == processId) {
+			processIndex = i;
+			break;
+		}
+	}
+	for (int i = 0; i < NUM_RESOURCES; i++) {
+		work[i] -= request;
+		temp_allocation[processIndex][i] += request;
+	}
+
+	//3. Find a process that can finish
+	int count = 0;
+	while (count < 18) {
+		bool found = false;
+		for (int i = 0; i < 18; i++) {
+			if (!finish[i]) {
+				bool canFinish = true;
+				for (int j = 0; j < NUM_RESOURCES; j++) {
+					if (need[i][j] > work[j]) {
+						canFinish = false;
+						break;
+					}
+				}
+				if (canFinish) {
+					for (int j = 0; j < NUM_RESOURCES; j++) {
+						work[j] += temp_allocation[i][j];
+					}
+					finish[i] = true;
+					count++;
+					found = true;
+				}
+			}
+		}
+		if (!found) {
+			return false; //Unsafe state
+		}
+	}
+	return true; //Safe state
 }
 
 int main(int argc, char *argv[]) {
 	//4. Main Loop
 	int totalProcesses = 0;
+
+	//Command line argument parsing same as before
+	// Shared memory setup 
+	if (setup_shared_memory()) {
+		fprintf(stderr, "Failed to setup shared memory for clock\\n");
+		return 1;
+	}
+
+	// Message queue setup
+	msqid = msgget(MSGKEY, IPC_CREAT | 0666);
+	if (msqid == -1) {
+		perror("msgget");
+		cleanup_shared_memory();
+		exit(1);
+	}
+
+	// Initialize resource table
+	initializeResourceTable();
+
+	//Initialize available
+	for (int i = 0; i < NUM_RESOURCES; i++) {
+		available[i] = NUM_INSTANCES; //Initially, all instances are available
+	}
+
+	//Initialize max
+	for (int i = 0; i < 18; i++) {
+		for (int j = 0; j < NUM_RESOURCES; j++) {
+			max[i][j] = NUM_INSTANCES / 2;
+		}
+	}
+
+	//Initialize allocation
+	for (int i = 0; i < 18; i++) {
+		for (int j = 0; j < NUM_RESOURCES; j++) {
+			allocation[i][j] = 0;
+		}
+	}
+
+	//Initialize need
+	for (int i = 0; i < 18; i++) {
+		for (int j = 0; j < NUM_RESOURCES; j++) {
+			need[i][j] = max[i][j] - allocation[i][j];
+		}
+	}
+
+
 	while (totalProcesses < MAX_PROCESSES) {
 		//a. Increment the clock
 		simClock->nanoseconds += 1000000; //increment by 1ms
@@ -266,42 +369,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	//5. Cleanup 
-	//
+	cleanup_shared_memory(); //cleanup
 
 	return 0;
 }
-	//d. Check for terminated child processes
-	pid_t childPid;
-	int status;
-	while ((childPid = waitpid(-1, &status, WNOHANG)) > 0) {
-		printf("OSS: Child process %d terminated\n", childPid);
-		// Clean up process table entry (if needed)
-            	for (int i = 0; i < 18; i++) {
-			if (processTable[i].pid == childPid) {
-				processTable[i].pid = 0; //Or mark as not occupied
-				break;
-			}
-		}
-	}
-
-	//e. Deadlock detection (every second)
-	if (simClock->seconds % 1 == 0) {
-		//Run deadlock detection algorithm 
-		printf("OSS: Running deadlock detection\n");
-	}
-
-	//f. Output resource and process tables (every half second)
-	if ((simClock->nanoseconds % 500000000) == 0) {
-		//printResourceTable();
-		//printProcessTable();
-	}
-
-	if (simClock->seconds >= MAX_RUNTIME_SECONDS)
-		break;
-	}
-	//main program logic
-
-	cleanup_shared_memory(); //don't forget to cleanup
-	return 0;
-}
-

@@ -45,7 +45,7 @@ int attach_shared_memory() {
 		return 1;
 	}
 	
-	int shmid = shmget(key, sizeof(SimulatedClock), 0666); //No IPC_CREAT
+	shmid = shmget(key, sizeof(SimulatedClock), 0666); //No IPC_CREAT
 	if (shmid == -1) {
 		perror("shmget");
 		return 1;
@@ -204,9 +204,4 @@ int main(int argc, char *argv[]) {
 		shmdt(simClock);
 		return 0;
 }
-			
-	printf("User proc started, clock: %u:%u\n", simClock->seconds, simClock->nanoseconds);
 
-	detach_shared_memory();
-	return 0;
-}
