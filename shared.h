@@ -4,6 +4,9 @@
 #ifndef SHARED_H_
 #define SHARED_H_
 
+#pragma pack(push, 1)
+
+
 typedef struct {
 	unsigned int seconds;
 	unsigned int nanoseconds;
@@ -30,5 +33,19 @@ typedef struct {
 	int allocated[18]; //Instances allocated to each process (index =PCB index)
 	//int requestQueue[18]; //queue of processes waiting for this resource
 } ResourceDescriptor;
+
+//Message structures for OSS <-> worker communication
+struct oss_message {
+	long mtype; // PID of the destination process
+	int command;
+	int resourceId;
+};
+
+struct worker_message {
+	long mtype; // PID of the destination process (user_proc)
+	int status;
+};
+
+#pragma pack(pop)
 
 #endif

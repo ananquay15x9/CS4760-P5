@@ -163,18 +163,6 @@ void handleResourceRelease(int pid, int resourceId) {
 	}
 }
 
-//Message structures 
-struct oss_message {
-	long mtype; //PID of the destination process
-	int command;
-	int resourceId;
-};
-
-struct worker_message {
-	long mtype; //PID of the destination process (user_proc)
-	int status;
-};
-
 // Function to send a message to a worker process
 int send_message_to_worker(pid_t worker_pid, int status) {
 	struct worker_message worker_response;
@@ -182,6 +170,7 @@ int send_message_to_worker(pid_t worker_pid, int status) {
     	worker_response.status = status;
 
 	if (msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0) == -1) {
+	printf("OSS sending: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
 		perror("msgsnd (response to worker)");
 		return -1;
 	}
@@ -451,9 +440,42 @@ void printStatistics() {
     	oss_log("===============================\n\n");
 }
 
+// SIGINT handler for cleanup on Ctrl+C
+void handle_sigint(int sig) {
+	//Send SIGTERM to all children
+	for (int i = 0; i < 18; i++) {
+		if (processTable[i].pid != 0) {
+			kill(processTable[i].pid, SIGTERM);
+		}
+	}
+
+	//Give them a moment to exit
+	usleep(200000); //200ms
+
+	//Send SIGKILL to any that remain
+	for (int i = 0; i < 18; i++) {
+		if (processTable[i].pid != 0) {
+			kill(processTable[i].pid, SIGKILL);
+		}
+	}
+
+	//Wait for all children
+	while (wait(NULL) > 0);
+	//Cleanup shared memory
+	cleanup_shared_memory();
+	//Print final statistics
+	printStatistics();
+    	if (logfile) fclose(logfile);
+    	exit(0);
+}
+
 int main(int argc, char *argv[]) {
+	//Register SIGINT handler for cleanup
+	signal(SIGINT, handle_sigint);
+
 	//4. Main Loop
 	int totalProcesses = 0;
+	int terminatedChildren = 0;
 
 	//Command line argument parsing 
 	char *logfilename = NULL;
@@ -524,7 +546,10 @@ int main(int argc, char *argv[]) {
 		last_printed_request_count = stat_requests_granted_immediately + stat_requests_granted_after_wait;
 	}
 
-	while (totalProcesses < MAX_PROCESSES) {
+	printf("sizeof(struct oss_message) = %zu\n", sizeof(struct oss_message));
+	printf("sizeof(struct worker_message) = %zu\n", sizeof(struct worker_message));
+
+	while (1) {
 		//a. Increment the clock
 		simClock->nanoseconds += 1000000; //increment by 1ms
 		if (simClock->nanoseconds >= 1000000000) {
@@ -557,8 +582,6 @@ int main(int argc, char *argv[]) {
 				} else {
 					oss_log("OSS: No available slot for new processes!\n");
 				}
-				totalProcesses++;
-				oss_log("OSS: Launched child process %d\n", pid);
 			} else {
 				perror("fork");
 			}
@@ -567,6 +590,7 @@ int main(int argc, char *argv[]) {
 		//c. Check for messages from user processes
 		struct oss_message oss_msg;
 		if (msgrcv(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0, IPC_NOWAIT) != -1) {
+		printf("OSS received: mtype=%ld, command=%d, resourceId=%d\n", oss_msg.mtype, oss_msg.command, oss_msg.resourceId);
 			// Message received
 			switch (oss_msg.command) {
 				case REQUEST_RESOURCE: {
@@ -613,6 +637,7 @@ int main(int argc, char *argv[]) {
 		while((childPid = waitpid(-1, &status, WNOHANG)) > 0) {
 			oss_log("OSS: Child process %d terminated\n", childPid);
 			stat_normal_terminations++;
+			terminatedChildren++;
 			//Clean up process table entry (if needed)
 			for (int i = 0; i < 18; i++) {
 				if (processTable[i].pid == childPid) {
@@ -637,11 +662,29 @@ int main(int argc, char *argv[]) {
 		//At the end of each loop, try to process the wait queue
 		processWaitQueue();
 
-		if (simClock->seconds >= MAX_RUNTIME_SECONDS)
+		//After waitpid and process table cleanup:
+		int runningChildren = 0;
+		for (int i = 0; i < 18; i++) {
+			if (processTable[i].pid != 0) runningChildren++;
+		}
+
+		// Terminate if all children have finished or simulation time is up
+		if ((totalProcesses >= MAX_PROCESSES && runningChildren == 0) || simClock->seconds >= MAX_RUNTIME_SECONDS) {
 			break;
+		}
 	}
 
 	//5. Cleanup 
+	//Send SIGTERM to all remaining children
+	for (int i = 0; i < 18; i++) {
+		if (processTable[i].pid != 0) {
+			kill(processTable[i].pid, SIGTERM);
+		}
+	}
+	
+	//Wait for all children to exit
+	while (wait(NULL) > 0);
+
 	cleanup_shared_memory(); //cleanup
 
 	//At the end of main, before cleanup, print final statistics

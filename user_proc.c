@@ -12,18 +12,7 @@
 #include <errno.h>
 #include <sys/msg.h> //for message queues
 #include <time.h> //for generating random numbers
-
-//Message structures
-struct oss_message {
-	long mtype; //PID of the destination process (oss in this case)
-	int command; //Type of request 
-	int resourceId; //The ID of the resource being requested or released
-};
-
-struct worker_message {
-	long mtype; //PID of the destination process (user_proc in this case)
-	int status; //Status of the request (eg., Granted, DENIED)
-};
+#include <signal.h>
 
 //Constants 
 #define MSGKEY 12345
@@ -37,6 +26,11 @@ struct worker_message {
 SimulatedClock *simClock;
 int shmid;
 int msqid;
+
+void handle_sigterm(int sig) {
+	printf("Process %d received SIGTERM, exiting.\n", getpid());
+	exit(0);
+}
 
 int attach_shared_memory() {
 	key_t key = ftok("oss.c", 1); //Same key as in oss.c
@@ -66,6 +60,12 @@ void detach_shared_memory() {
 }
 
 int main(int argc, char *argv[]) {
+	signal(SIGTERM, handle_sigterm);
+	
+	//Print struct sizes for debugging
+	printf("sizeof(struct oss_message) = %zu\n", sizeof(struct oss_message));
+	printf("sizeof(struct worker_message) = %zu\n", sizeof(struct worker_message));
+
 	if (argc != 2) {
 		fprintf(stderr, "Usage: %s <bound_B>\n", argv[0]);
 		return 1;
@@ -126,7 +126,7 @@ int main(int argc, char *argv[]) {
 		int action = rand() % 2; // 0 for request, 1 for release
 		int resourceId = rand() % MAX_RESOURCES;
 		struct oss_message oss_msg;
-		oss_msg.mtype = getppid(); //send message to oss
+		oss_msg.mtype = getpid(); //send message to oss
 		oss_msg.resourceId = resourceId;
 
 		if (action == 0) {
@@ -135,6 +135,7 @@ int main(int argc, char *argv[]) {
 				oss_msg.command = REQUEST_RESOURCE;
 				printf("Process %d requesting resource %d at time %u:%u\n",
 					getpid(), resourceId, simClock->seconds, simClock->nanoseconds);
+				printf("USER_PROC sending: mtype=%ld, command=%d, resourceId=%d\n", oss_msg.mtype, oss_msg.command, oss_msg.resourceId); //debug print
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (request)");
 					break;
@@ -146,6 +147,8 @@ int main(int argc, char *argv[]) {
 					perror("msgrcv (response)");
 					break;
 				}
+
+				printf("USER_PROC received: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
 
 				if (worker_response.status == 1) {
 					printf("Process %d granted resource %d\n", getpid(), resourceId);
@@ -180,7 +183,7 @@ int main(int argc, char *argv[]) {
 			if (simClock->seconds > 1 && ((double)rand() / RAND_MAX) < 0.15) {
 				//send message to oss to terminate
 				oss_msg.command = TERMINATE;
-				oss_msg.mtype = getppid();
+				oss_msg.mtype = getpid();
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (terminate)");
 				}
