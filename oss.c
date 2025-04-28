@@ -159,7 +159,7 @@ void handleResourceRelease(int pid, int resourceId) {
 	}
 
 	if (processIndex == -1) {
-		fprintf(stderr, "Error: Process with PID %d not found in process table\n", pid);
+		oss_log("OSS Warning:: Process with PID %d not found in process table\n", pid);
 		return; //process not found
 	}
 
@@ -224,6 +224,10 @@ void cleanup_shared_memory() {
 
 //Function to check if the system is in a safe state
 bool isSafe(int processId, int resourceId, int request) {
+	if (available[resourceId] < request) {
+		return false; //Not enough available
+	}
+
 	int work[NUM_RESOURCES]; //available resources
 	bool finish[18]; //indicates if a process can finish
 	int temp_allocation[18][NUM_RESOURCES]; //temporary allocation matrix
@@ -543,12 +547,6 @@ int main(int argc, char *argv[]) {
 
 	//In main loop, add periodic output
 	static int last_printed_request_count = 0;
-	if ((stat_requests_granted_immediately + stat_requests_granted_after_wait) - last_printed_request_count >= 20) {
-		printResourceTable();
-		printProcessTable();
-		printStatistics();
-		last_printed_request_count = stat_requests_granted_immediately + stat_requests_granted_after_wait;
-	}
 
 	printf("sizeof(struct oss_message) = %zu\n", sizeof(struct oss_message));
 	printf("sizeof(struct worker_message) = %zu\n", sizeof(struct worker_message));
@@ -672,11 +670,21 @@ int main(int argc, char *argv[]) {
 			if (processTable[i].pid != 0) runningChildren++;
 		}
 
+		//print resource and process tables every 20 grants
+		if ((stat_requests_granted_immediately + stat_requests_granted_after_wait) - last_printed_request_count >= 20) {
+    			printResourceTable();
+    			printProcessTable();
+    			printStatistics();
+    			last_printed_request_count = stat_requests_granted_immediately + stat_requests_granted_after_wait;
+		}
+
 		// Terminate if all children have finished or simulation time is up
 		if ((totalProcesses >= MAX_PROCESSES && runningChildren == 0) || simClock->seconds >= MAX_RUNTIME_SECONDS) {
 			break;
 		}
 	}
+
+	
 
 	//5. Cleanup 
 	//Send SIGTERM to all remaining children
@@ -688,6 +696,11 @@ int main(int argc, char *argv[]) {
 	
 	//Wait for all children to exit
 	while (wait(NULL) > 0);
+
+	//Print final output
+	printResourceTable();
+	printProcessTable();
+	printStatistics();
 
 	cleanup_shared_memory(); //cleanup
 
