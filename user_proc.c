@@ -148,7 +148,7 @@ int main(int argc, char *argv[]) {
 					break;
 				}
 
-				printf("USER_PROC received: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
+				printf("USER_PROC received: status=%d\n", worker_response.status);
 
 				if (worker_response.status == 1) {
 					printf("Process %d granted resource %d\n", getpid(), resourceId);
