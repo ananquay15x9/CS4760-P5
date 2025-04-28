@@ -143,7 +143,7 @@ int main(int argc, char *argv[]) {
 
 				//Wait for a response from oss (for resource requests)
 				struct worker_message worker_response;
-				if (msgrcv(msqid, &worker_response, sizeof(worker_response) - sizeof(long), getpid(), 0) == -1) {
+				if (msgrcv(msqid, &worker_response.status, sizeof(worker_response.status), getpid(), 0) == -1) {
 					perror("msgrcv (response)");
 					break;
 				}

@@ -126,8 +126,13 @@ int handleResourceRequest(int pid, int resourceId) {
 	}
 
 	if (processIndex == -1) {
-		fprintf(stderr, "Error: Process with PID %d not found in process table\n", pid);
+		oss_log("OSS Warning: Received message from dead process %d\n", pid);
 		return -1; //Process not found
+	}
+
+	//Check if enough resources available
+	if (available[resourceId] < 1) {
+		return 0; //can't grant
 	}
 
 	//Check if the request can be granted safely
@@ -232,9 +237,7 @@ bool isSafe(int processId, int resourceId, int request) {
 	}
 
 	//2. Simulate the allocation
-	for (int i = 0; i < NUM_RESOURCES; i++) {
-		work[i] -= request;
-	}
+	work[resourceId] -= request;
 
 	//2.5 Copy allocation to temp_allocation
 	for (int i = 0; i < 18; i++) {
@@ -250,10 +253,9 @@ bool isSafe(int processId, int resourceId, int request) {
 			break;
 		}
 	}
-	for (int i = 0; i < NUM_RESOURCES; i++) {
-		work[i] -= request;
-		temp_allocation[processIndex][i] += request;
-	}
+	
+	//Simulate allocating the resource
+	temp_allocation[processIndex][resourceId] += request; //newly added
 
 	//3. Find a process that can finish
 	int count = 0;
