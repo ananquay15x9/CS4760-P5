@@ -161,7 +161,7 @@ int main(int argc, char *argv[]) {
 				oss_msg.command = RELEASE_RESOURCE;
 				printf("Process %d releasing resource %d at time %u:%u\n",
 					getpid(), resourceId, simClock->seconds, simClock->nanoseconds);
-				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1 {
+				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (release)");
 					break;
 				}
