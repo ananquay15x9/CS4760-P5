@@ -16,16 +16,18 @@
 #include <sys/wait.h> //Include for waitpid()
 #include <string.h>
 #include <stdarg.h>
+#include <time.h>
 
 //Constants (These could also be in a header file)
 #define MSGKEY 12345
-#define MAX_PROCESSES 100
+#define MAX_PROCESSES 40
 #define MAX_RUNTIME_SECONDS 3
 #define NUM_RESOURCES 5
 #define NUM_INSTANCES 10
 #define REQUEST_RESOURCE 1
 #define RELEASE_RESOURCE 2
 #define TERMINATE 3
+#define LOG_LINE_LIMIT 10000
 
 // Statistics tracking
 int stat_requests_granted_immediately = 0;
@@ -100,6 +102,28 @@ void processWaitQueue() {
 	}
 }
 
+//signal handler
+void sigint_handler(int sig) {
+	oss_log("OSS: Caught SIGINT, cleaning up...\n");
+
+	//kill all remanining user processes
+	for (int i = 0; i < 18; i++) {
+		if (processTable[i].pid != 0) {
+			kill(processTable[i].pid, SIGTERM);
+		}
+	}
+
+	//Wait for all children to exit
+	while (wait(NULL) > 0);
+
+	//clean up shared memory
+	cleanup_shared_memory();
+
+	//Close logfile
+	if (logfile) fclose(logfile);
+
+	exit(1);
+}
 
 //Function to check if the system is in a safe state
 bool isSafe(int processId, int resourceId, int request);
@@ -173,8 +197,10 @@ void handleResourceRelease(int pid, int resourceId) {
 // Function to send a message to a worker process
 int send_message_to_worker(pid_t worker_pid, int status) {
 	struct worker_message worker_response;
-	worker_response.mtype = worker_pid;
-    	worker_response.status = status;
+	worker_response.mtype = worker_pid; //Child's PID
+    	worker_response.status = 1; //granted or terminated OK
+
+	msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0);
 
 	if (msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0) == -1) {
 	printf("OSS sending: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
@@ -395,9 +421,11 @@ int verbose = 0;
 int log_line_count = 0;
 #define LOG_LINE_LIMIT 10000
 
+static int warning_count = 0;
 //Logging helper function
 void oss_log(const char *fmt, ...) {
 	if (log_line_count >= LOG_LINE_LIMIT) return;
+
 	va_list args;
 	va_start(args, fmt);
 	vprintf(fmt, args);
@@ -406,6 +434,11 @@ void oss_log(const char *fmt, ...) {
 	}
 	va_end(args);
 	log_line_count++;
+
+	if (strstr(fmt, "Warning") != NULL) {
+		warning_count++;
+		if (warning_count > 100) exit(1); //Too many warnings
+	}
 }
 
 //Helper to print resource table
@@ -460,10 +493,10 @@ void handle_sigint(int sig) {
 	//Give them a moment to exit
 	usleep(200000); //200ms
 
-	//Send SIGKILL to any that remain
+	//Send SIGTERM to any that remain
 	for (int i = 0; i < 18; i++) {
 		if (processTable[i].pid != 0) {
-			kill(processTable[i].pid, SIGKILL);
+			kill(processTable[i].pid, SIGTERM);
 		}
 	}
 
@@ -472,14 +505,13 @@ void handle_sigint(int sig) {
 	//Cleanup shared memory
 	cleanup_shared_memory();
 	//Print final statistics
-	printStatistics();
     	if (logfile) fclose(logfile);
     	exit(0);
 }
 
 int main(int argc, char *argv[]) {
 	//Register SIGINT handler for cleanup
-	signal(SIGINT, handle_sigint);
+	signal(SIGINT, sigint_handler);
 
 	//4. Main Loop
 	int totalProcesses = 0;
@@ -639,7 +671,8 @@ int main(int argc, char *argv[]) {
 		while((childPid = waitpid(-1, &status, WNOHANG)) > 0) {
 			oss_log("OSS: Child process %d terminated\n", childPid);
 			stat_normal_terminations++;
-			terminatedChildren++;
+			//terminatedChildren++;
+
 			//Clean up process table entry (if needed)
 			for (int i = 0; i < 18; i++) {
 				if (processTable[i].pid == childPid) {
@@ -647,6 +680,12 @@ int main(int argc, char *argv[]) {
 					break;
 				}
 			}
+		}
+
+		//Move runningChildren counting here
+		int runningChildren = 0;
+		for (int i = 0; i < 18; i++) {
+			if (processTable[i].pid != 0) runningChildren++;
 		}
 
 		//e. Deadlock detection (every second)
@@ -664,22 +703,49 @@ int main(int argc, char *argv[]) {
 		//At the end of each loop, try to process the wait queue
 		processWaitQueue();
 
-		//After waitpid and process table cleanup:
-		int runningChildren = 0;
-		for (int i = 0; i < 18; i++) {
-			if (processTable[i].pid != 0) runningChildren++;
+
+		//Only fork if there are fewer than 18 running
+		if (runningChildren < 18 && totalProcesses < MAX_PROCESSES) {
+			pid_t pid = fork();
+			if (pid == 0) {
+				//Child process
+				char bound_B_str[20];
+				sprintf(bound_B_str, "%d", 100000); //bound_b value
+				execl("./user_proc", "user_proc", bound_B_str, NULL);
+				perror("execl");
+				exit(1);
+			} else if (pid > 0) {
+				//Parent process
+				int slot = -1;
+				for (int i = 0; i < 18; i++) {
+					if (processTable[i].pid == 0) {
+						slot = i;
+						break;
+					}
+				}
+				if (slot != -1) {
+					processTable[slot].pid = pid;
+					oss_log("OSS: Launched child process %d in slot %d\n", pid, slot);
+					totalProcesses++;
+				} else {
+					oss_log("OSS: No available slot for new processes!\n");
+				}
+			} else {
+				perror("fork");
+			}
 		}
 
 		//print resource and process tables every 20 grants
-		if ((stat_requests_granted_immediately + stat_requests_granted_after_wait) - last_printed_request_count >= 20) {
+		if ((stat_requests_granted_immediately + stat_requests_granted_after_wait) % 20 == 0) {
     			printResourceTable();
     			printProcessTable();
     			printStatistics();
-    			last_printed_request_count = stat_requests_granted_immediately + stat_requests_granted_after_wait;
+    			//last_printed_request_count = stat_requests_granted_immediately + stat_requests_granted_after_wait;
 		}
 
 		// Terminate if all children have finished or simulation time is up
-		if ((totalProcesses >= MAX_PROCESSES && runningChildren == 0) || simClock->seconds >= MAX_RUNTIME_SECONDS) {
+		if ((totalProcesses >= MAX_PROCESSES && runningChildren == 0) || simClock->seconds >= 5) {
+			oss_log("OSS: Simulation terminating at time %u:%u\n", simClock->seconds, simClock->nanoseconds);
 			break;
 		}
 	}

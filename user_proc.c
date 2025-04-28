@@ -143,12 +143,13 @@ int main(int argc, char *argv[]) {
 
 				//Wait for a response from oss (for resource requests)
 				struct worker_message worker_response;
-				if (msgrcv(msqid, &worker_response.status, sizeof(worker_response.status), getpid(), 0) == -1) {
-					perror("msgrcv (response)");
-					break;
+				if (msgrcv(msqid, &worker_response, sizeof(worker_response) - sizeof(long), getpid(), 0) == -1) {
+					perror("msgrcv (terminate))");
+				} else {
+					printf("USER_PROC received termination confirmation, exiting.\n");
 				}
 
-				printf("USER_PROC received: status=%d\n", worker_response.status);
+				printf("USER_PROC received: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
 
 				if (worker_response.status == 1) {
 					printf("Process %d granted resource %d\n", getpid(), resourceId);
@@ -186,6 +187,13 @@ int main(int argc, char *argv[]) {
 				oss_msg.mtype = getpid();
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (terminate)");
+				} else {
+					struct worker_message worker_response;
+					if (msgrcv(msqid, &worker_response.status, sizeof(worker_response.status), getpid(), 0) == -1) {
+						perror("msgrcv (terminate response)");
+					} else {
+						printf("Process %d received terminate confirmation from OSS\n", getpid());
+					}
 				}
 				printf("Process %d terminating\n", getpid());
 				break;
@@ -197,4 +205,5 @@ int main(int argc, char *argv[]) {
 	shmdt(simClock);
 	return 0;
 }
+
 
