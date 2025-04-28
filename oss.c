@@ -133,6 +133,7 @@ int handleResourceRequest(int pid, int resourceId) {
 	//Check if the request can be granted safely
 	if (isSafe(pid, resourceId, 1)) { //assuming each request is for 1 instance
 		resourceTable[resourceId].availableInstances--;
+		available[resourceId]--;
 		resourceTable[resourceId].allocated[processIndex]++;
 		allocation[processIndex][resourceId]++; //update allocation
 		need[processIndex][resourceId]--; //update need
@@ -159,6 +160,7 @@ void handleResourceRelease(int pid, int resourceId) {
 
 	if (resourceTable[resourceId].allocated[processIndex] > 0) {
 		resourceTable[resourceId].availableInstances++;
+		available[resourceId]++;
 		resourceTable[resourceId].allocated[processIndex]--;
 	}
 }
@@ -617,7 +619,7 @@ int main(int argc, char *argv[]) {
 				case TERMINATE:
 					oss_log("OSS: Received terminate request from process %ld at time %u:%u\n",
 						oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
-					//handle terminate process;
+					send_message_to_worker(oss_msg.mtype, 1); // Send confirmation so user_proc can exit
 					break;
 				default: 
 					oss_log("OSS: Unknown message command %d from process %ld\n",
