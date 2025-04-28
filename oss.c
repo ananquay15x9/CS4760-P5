@@ -544,7 +544,19 @@ int main(int argc, char *argv[]) {
 				exit(1);
 			} else if (pid > 0) {
 				//Parent process
-				processTable[totalProcesses].pid = pid;
+				int slot = -1;
+				for (int i = 0; i < 18; i++) {
+					if (processTable[i].pid == 0) {
+						slot = i;
+						break;
+					}
+				}
+				if (slot != -1) {
+					processTable[slot].pid = pid;
+					oss_log("OSS: Launched child process %d in slot %d\n", pid, slot);
+				} else {
+					oss_log("OSS: No available slot for new processes!\n");
+				}
 				totalProcesses++;
 				oss_log("OSS: Launched child process %d\n", pid);
 			} else {
