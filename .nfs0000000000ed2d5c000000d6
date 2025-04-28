@@ -1,25 +1,13 @@
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Child process 1 terminated
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Child process 1 terminated
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
-OSS: Child process 1 terminated
-OSS: Launched child process 345129508
-OSS: Launched child process 345129508
+OSS: Launched child process 1068716580
+OSS: Launched child process 1068716580
+OSS: Launched child process 1068716580
+OSS: Launched child process 1068716580
+OSS: Launched child process 1068716580
 Current system resources (available/total):
 R0: 44/0  R0: 10/0  R0: 10/0  R0: 10/0  R0: 10/0  
 Current process allocations:
     R0 R0 R0 R0 R0 
+P0   0  4  8 12 16 
 P48 20 24 28 32 36 
 P96 40 44 48 52 56 
 P144 60 64 68 72 76 
@@ -29,15 +17,17 @@ Current system resources (available/total):
 R0: 44/5  R0: 10/5  R0: 10/5  R0: 10/5  R0: 10/5  
 Current process allocations:
     R0 R0 R0 R0 R0 
+P0   0  4  8 12 16 
 P48 20 24 28 32 36 
 P96 40 44 48 52 56 
 P144 60 64 68 72 76 
 P192 80 84 88 92 96 
-OSS: Child process 1 terminated
 Current system resources (available/total):
 R0: 44/0  R0: 10/0  R0: 10/0  R0: 10/0  R0: 10/0  
 Current process allocations:
     R0 R0 R0 R0 R0 
+P0   0  4  8 12 16 
+P48 20 24 28 32 36 
 P96 40 44 48 52 56 
 P144 60 64 68 72 76 
 P192 80 84 88 92 96 
@@ -46,6 +36,8 @@ Current system resources (available/total):
 R0: 44/5  R0: 10/5  R0: 10/5  R0: 10/5  R0: 10/5  
 Current process allocations:
     R0 R0 R0 R0 R0 
+P0   0  4  8 12 16 
+P48 20 24 28 32 36 
 P96 40 44 48 52 56 
 P144 60 64 68 72 76 
 P192 80 84 88 92 96 
@@ -53,17 +45,21 @@ Current system resources (available/total):
 R0: 44/0  R0: 10/0  R0: 10/0  R0: 10/0  R0: 10/0  
 Current process allocations:
     R0 R0 R0 R0 R0 
+P0   0  4  8 12 16 
+P48 20 24 28 32 36 
 P96 40 44 48 52 56 
 P144 60 64 68 72 76 
 P192 80 84 88 92 96 
-OSS: Child process 1 terminated
-OSS: Child process 1 terminated
-OSS: Child process 1 terminated
-OSS: Deadlock detection: No deadlocks detected at time 17:2048
+OSS: Deadlock detection: No deadlocks detected at time 10:2048
 Current system resources (available/total):
 R0: 44/5  R0: 10/5  R0: 10/5  R0: 10/5  R0: 10/5  
 Current process allocations:
     R0 R0 R0 R0 R0 
+P0   0  4  8 12 16 
+P48 20 24 28 32 36 
+P96 40 44 48 52 56 
+P144 60 64 68 72 76 
+P192 80 84 88 92 96 
 
 ==== Simulation Statistics ====
 Requests granted immediately: 0
