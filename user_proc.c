@@ -124,16 +124,11 @@ int main(int argc, char *argv[]) {
 
 		//b. Randomly decide to request or release a resource
 		int action = rand() % 2; // 0 for request, 1 for release
-		int resourceId = rand() % MAX_RESOURCES;
-		struct oss_message oss_msg = {0}; //clear struct memory
-		oss_msg.mtype = getpid(); //send message to oss
-		oss_msg.resourceId = resourceId;
 
 		if (action == 0) {
-			//request a resource
-			if (myResources[resourceId] < MAX_INSTANCES) { //can only request if less than max instances
-				int requestedResourceId = rand() % MAX_RESOURCES;
-
+			//REQUEST block
+			int requestedResourceId = rand() % MAX_RESOURCES;
+			if (myResources[requestedResourceId] < MAX_INSTANCES) { //can only request if less than max instanes
 				struct oss_message oss_msg = {0}; //zero out
 				oss_msg.mtype = getpid();
 				oss_msg.command = REQUEST_RESOURCE;
@@ -144,7 +139,6 @@ int main(int argc, char *argv[]) {
 					break;
 				}
 
-				//Wait for a response from oss (for resource requests)
 				struct worker_message worker_response;
 				if (msgrcv(msqid, &worker_response, sizeof(worker_response) - sizeof(long), getpid(), 0) == -1) {
 					perror("msgrcv (response))");
@@ -157,20 +151,11 @@ int main(int argc, char *argv[]) {
 						printf("Process %d denied resource %d.\n", getpid(), requestedResourceId);
 					}
 				}
-				//printf("USER_PROC received: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
-				//if (worker_response.status == 1) {
-				//	printf("Process %d granted resource %d\n", getpid(), resourceId);
-				//	myResources[resourceId]++; //increment resource count
-				//} else {
-					//printf("Process %d denied resource %d\n", getpid(), resourceId);
-					//Optionally handle denial (e.g., wait and retry, request a different resource)
-				//}
 			}
 		} else {
-			//Release a resource
-			if (myResources[resourceId] > 0) {
-				int releaseResourceId = resourceId; // keep local
-
+			//RELEASE block
+			int releaseResourceId = rand() % MAX_RESOURCES;
+			if (myResources[releaseResourceId] > 0) {	
 				struct oss_message oss_msg = {0}; //zero out
 				oss_msg.mtype = getpid();
 				oss_msg.command = RELEASE_RESOURCE;
@@ -180,7 +165,8 @@ int main(int argc, char *argv[]) {
 					perror("msgsnd (release)");
 					break;
 				}
-				myResources[resourceId]--;
+				myResources[releaseResourceId]--;
+				printf("Process %d released resource %d\n", getpid(), releaseResourceId);
 			}
 		}
 
