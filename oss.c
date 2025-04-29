@@ -96,6 +96,14 @@ void processWaitQueue() {
 	while (i < waitQueueSize) {
 		int pid = waitQueue[i].pid;
 		int resourceId = waitQueue[i].resourceId;
+
+		//SAFETY CHECK
+		if (resourceId < 0 || resourceId >= NUM_RESOURCES) {
+			oss_log("OSS Warning: Invalid resource ID %d in wait queue for process %d. Skipping.\n", resourceId, pid);
+			removeFromWaitQueue(i); //remove invalid
+			continue;
+		}
+
 		int granted = handleResourceRequest(pid, resourceId);
 		if (granted == 1) {
 			send_message_to_worker(pid, 1);
@@ -157,6 +165,12 @@ int handleResourceRequest(int pid, int resourceId) {
 	if (processIndex == -1) {
 		oss_log("OSS Warning: Received message from dead process %d\n", pid);
 		return -1; //Process not found
+	}
+
+	//VALIDATION
+	if (resourceId < 0 || resourceId >= NUM_RESOURCES) {
+		oss_log("OSS Warning: Invalid resourceId %d received in handleResourceRequest. Skipping.\n", resourceId);
+		return 0; //Safely skip bad resource ID
 	}
 
 	//Check if enough resources available
@@ -439,22 +453,26 @@ void oss_log(const char *fmt, ...) {
 void printResourceTable() {
 	oss_log("Current system resources (available/total):\n");
 	for (int i = 0; i < NUM_RESOURCES; i++) {
-		oss_log("R%d: %d/%d  ", i, available[i], NUM_INSTANCES);
+		if (i >= 0 && i < NUM_RESOURCES) { //Guard even if loop is bad
+			oss_log("R%d: %d/%d  ", i, available[i], NUM_INSTANCES);
+		}
 	}
 	oss_log("\n");
 }
 
 // Helper to print process table
 void printProcessTable() {
-	oss_log("Current process allocations:\n");
-    	oss_log("    ");
-    	for (int j = 0; j < NUM_RESOURCES; j++) {
-        	oss_log("R%d ", j);
-    	}
+	oss_log("Current process allocations:\n  ");
+	for (int i = 0; i < NUM_RESOURCES; i++) {
+		if (i >= 0 && i < NUM_RESOURCES) { //Logging guard
+			oss_log("R%d ", i);
+		}
+	}
 	oss_log("\n");
+
 	for (int i = 0; i < 18; i++) {
 		if (processTable[i].pid != 0) {
-			oss_log("P%-2d ", i);
+			oss_log("P%d", processTable[i].pid);
 			for (int j = 0; j < NUM_RESOURCES; j++) {
 				oss_log("%2d ", allocation[i][j]);
 			}
@@ -540,6 +558,14 @@ int main(int argc, char *argv[]) {
 		cleanup_shared_memory();
 		exit(1);
 	}
+
+	//Clear OSS arrays
+	memset(resourceTable, 0, sizeof(resourceTable));
+    	memset(available, 0, sizeof(available));
+    	memset(allocation, 0, sizeof(allocation));
+    	memset(max, 0, sizeof(max));
+    	memset(need, 0, sizeof(need));
+    	memset(processTable, 0, sizeof(processTable));
 
 	// Initialize resource table
 	initializeResourceTable();
