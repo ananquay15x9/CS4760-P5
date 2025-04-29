@@ -27,10 +27,11 @@
 SimulatedClock *simClock;
 int shmid;
 int msqid;
+volatile sig_atomic_t terminating = 0;
 
 void handle_sigterm(int sig) {
+	terminating = 1;
 	printf("Process %d received SIGTERM, exiting.\n", getpid());
-	exit(0);
 }
 
 int attach_shared_memory() {
@@ -62,23 +63,77 @@ void detach_shared_memory() {
 
 // Function to safely send a message and wait for response
 bool send_message(int command, int resourceId) {
+	if (terminating) {
+		return false;
+	}
+
+	//Validate command
+	if (command != REQUEST_RESOURCE && command != RELEASE_RESOURCE && command != TERMINATE) {
+		return false;
+	}
+
+	//Initialize message structure
 	struct oss_message msg;
 	memset(&msg, 0, sizeof(struct oss_message));
 	msg.mtype = getpid();
 	msg.command = command;
 	msg.resourceId = resourceId;
 
-	if (msgsnd(msqid, &msg, sizeof(struct oss_message) - sizeof(long), 0) == -1) {
+	//Send messages with retries
+	int retries = 3;
+	while (retries > 0 && !terminating) {
+		if (msgsnd(msqid, &msg, sizeof(struct oss_message) - sizeof(long), IPC_NOWAIT) != -1) {
+			break;
+		}
+		if (errno != EAGAIN && errno != EINTR) {
+			return false;
+		}
+		retries--;
+		usleep(1000); // Short delay between retries
+	}
+
+	if (retries == 0 || terminating) {
 		return false;
 	}
 
-	struct worker_message response;
-	memset(&response, 0, sizeof(struct worker_message));
-	if (msgrcv(msqid, &response, sizeof(struct worker_message) - sizeof(long), getpid(), 0) == -1) {
+	// Only wait for response on resource requests/releases
+	if (command != TERMINATE) {
+		struct worker_message response;
+		memset(&response, 0, sizeof(struct worker_message));
+		
+		// Wait for response with timeout
+		struct timespec timeout;
+		timeout.tv_sec = 0;
+		timeout.tv_nsec = 100000000; // 100ms timeout
+		
+		fd_set readfds;
+		FD_ZERO(&readfds);
+		int msgfd = msqid;
+		FD_SET(msgfd, &readfds);
+
+		while (!terminating) {
+			ssize_t recv_size = msgrcv(msqid, &response, 
+									 sizeof(struct worker_message) - sizeof(long),
+									 getpid(), IPC_NOWAIT);
+			
+			if (recv_size == sizeof(struct worker_message) - sizeof(long)) {
+				return response.status == 1;
+			}
+			return false;  // Consider interrupted calls as failures
+		}
+		
+		if (errno != ENOMSG && errno != EINTR) {
+				break;
+			}
+			
+			usleep(1000); // Short delay before retry
+		}
 		return false;
 	}
+	
+	return true;  
+}
 
-	return response.status == 1;
 int main(int argc, char *argv[]) {
 	signal(SIGTERM, handle_sigterm);
 	
@@ -118,9 +173,11 @@ int main(int argc, char *argv[]) {
 	int consecutive_denials = 0;
 
 	//Main process loop
-	while (1) {
+	while (!terminating) {
 		//Sleep for a shorter time to be more active
 		usleep(rand() % bound_B);
+
+		if (terminating) break;
 
 		// Get current time
 		unsigned int curr_sec = simClock->seconds;
@@ -149,30 +206,34 @@ int main(int argc, char *argv[]) {
 			if (can_terminate && (total_requests >= 5 || consecutive_denials >= 3)) {
 				// Release all resources first
 				for (int i = 0; i < NUM_RESOURCES; i++) {
-					while (myResources[i] > 0) {
+					while (myResources[i] > 0 && !terminating) {
 						if (send_message(RELEASE_RESOURCE, i)) {
 							myResources[i]--;
+						} else {
+							usleep(1000);
 						}
 					}
-				}		
-				// Then send terminate message
-				if (send_message(TERMINATE, 0)) {
+				}
+				if (!terminating && send_message(TERMINATE, 0)) {
 					break;
 				}
 			}
 		}
+
+		if (terminating) break;
 
 		// Request or release resources
 		  if (total_held < 3 && total_requests < 15 && consecutive_denials < 3) {
 			// Try to request a resource
 			int resourceId = rand() % NUM_RESOURCES;
 			if (myResources[resourceId] < 2) {  // Maximum 2 of any resource
+				total_requests++; //Count attempt regardless of outcome
 				if (send_message(REQUEST_RESOURCE, resourceId)) {
 					myResources[resourceId]++;
 					consecutive_denials = 0;
-					total_requests++;
 				} else {
 					consecutive_denials++;
+					usleep(1000); //small delay after denial
 				}
 			}
 		} else if (total_held > 0) {
@@ -182,6 +243,18 @@ int main(int argc, char *argv[]) {
 				if (send_message(RELEASE_RESOURCE, resourceId)) {
 					myResources[resourceId]--;
 					consecutive_denials = 0;
+				}
+			}
+		}
+	}
+
+	// Final cleanup
+	if (!terminating) {
+		// Release any remaining resources
+		for (int i = 0; i < NUM_RESOURCES; i++) {
+			while (myResources[i] > 0) {
+				if (send_message(RELEASE_RESOURCE, i)) {
+					myResources[i]--;
 				}
 			}
 		}
