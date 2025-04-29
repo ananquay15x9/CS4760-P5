@@ -42,6 +42,7 @@ int stat_deadlock_processes_terminated = 0;
 int handleResourceRequest(int pid, int resourceId);
 int send_message_to_worker(pid_t worker_pid, int status);
 void oss_log(const char *fmt, ...);
+void cleanup_shared_memory();
 
 //Global Variables
 SimulatedClock *simClock;
@@ -53,6 +54,10 @@ int available[NUM_RESOURCES]; //available resources
 int max[18][NUM_RESOURCES]; //max demand of each process
 int allocation[18][NUM_RESOURCES]; //resources currently allocated to each process
 int need[18][NUM_RESOURCES]; //remaining need of each process
+int verbose = 0;
+int log_line_count = 0;
+static int warning_count = 0;
+FILE *logfile = NULL;
 
 //Wait queue for blocked resource requests
 #define MAX_WAIT_QUEUE 100
@@ -200,7 +205,7 @@ int send_message_to_worker(pid_t worker_pid, int status) {
 	worker_response.mtype = worker_pid; //Child's PID
     	worker_response.status = 1; //granted or terminated OK
 
-	msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0);
+	//msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0);
 
 	if (msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0) == -1) {
 	printf("OSS sending: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
@@ -415,13 +420,6 @@ void detectAndResolveDeadlock() {
 	}
 }
 
-//Logging and statistics globals
-FILE *logfile = NULL;
-int verbose = 0;
-int log_line_count = 0;
-#define LOG_LINE_LIMIT 10000
-
-static int warning_count = 0;
 //Logging helper function
 void oss_log(const char *fmt, ...) {
 	if (log_line_count >= LOG_LINE_LIMIT) return;
@@ -515,7 +513,6 @@ int main(int argc, char *argv[]) {
 
 	//4. Main Loop
 	int totalProcesses = 0;
-	int terminatedChildren = 0;
 
 	//Command line argument parsing 
 	char *logfilename = NULL;
@@ -577,8 +574,6 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	//In main loop, add periodic output
-	static int last_printed_request_count = 0;
 
 	printf("sizeof(struct oss_message) = %zu\n", sizeof(struct oss_message));
 	printf("sizeof(struct worker_message) = %zu\n", sizeof(struct worker_message));
@@ -613,6 +608,7 @@ int main(int argc, char *argv[]) {
 				if (slot != -1) {
 					processTable[slot].pid = pid;
 					oss_log("OSS: Launched child process %d in slot %d\n", pid, slot);
+					totalProcesses++;
 				} else {
 					oss_log("OSS: No available slot for new processes!\n");
 				}

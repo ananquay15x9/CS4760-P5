@@ -28,6 +28,10 @@ int log_line_count = 0;
 int totalProcesses = 0;
 struct process_table_entry processTable[18];
 
+int available[5] = {10, 10, 10, 10, 10}; // Initial available units for each resource
+int total[5] = {10, 10, 10, 10, 10};     // Total units for each resource
+
+
 void oss_log(const char* fmt, ...) {
     if (log_line_count >= LOG_LINE_LIMIT) return;
     va_list args;
@@ -60,10 +64,11 @@ void sigint_handler(int sig) {
 }
 
 void printResourceTable() {
-	oss_log("Current system resources:\n");
+	oss_log("Current system resources (available/total)::\n");
 	for (int i = 0; i < 5; i++) {
-		oss_log("R%d available\n", i);
+		oss_log("R%d: %d/%d ", i, available[i], total[i]);
 	}
+	oss_log("\n");
 }
 
 void printProcessTable() {
@@ -136,7 +141,7 @@ int main(int argc, char* argv[]) {
             if (pid == 0) {
                 char bound_B_str[20];
                 sprintf(bound_B_str, "%d", 100000);
-                execl("./user_proc", "user_proc", bound_B_str, NULL);
+                execl("./user_proc1", "user_proc1", bound_B_str, NULL);
                 perror("execl");
                 exit(1);
             } else if (pid > 0) {
