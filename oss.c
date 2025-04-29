@@ -731,6 +731,13 @@ int main(int argc, char *argv[]) {
 				continue;
 			}
 
+			//Basic validation
+			if (oss_msg.command != REQUEST_RESOURCE && oss_msg.command != RELEASE_RESOURCE && oss_msg.command != TERMINATE) {
+				oss_log("OSS Warning: Received invalid command %d from process %ld. Ignoring.\n",
+					oss_msg.command, oss_msg.mtype);
+				continue; // Skip processing this message
+			}
+
 			// Message received
 			switch (oss_msg.command) {
 				case REQUEST_RESOURCE: {
