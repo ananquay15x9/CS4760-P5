@@ -132,10 +132,13 @@ int main(int argc, char *argv[]) {
 		if (action == 0) {
 			//request a resource
 			if (myResources[resourceId] < MAX_INSTANCES) { //can only request if less than max instances
+				int requestedResourceId = rand() % MAX_RESOURCES;
+
 				struct oss_message oss_msg = {0}; //zero out
 				oss_msg.mtype = getpid();
 				oss_msg.command = REQUEST_RESOURCE;
-				oss_msg.resourceId = rand() % MAX_RESOURCES;
+				oss_msg.resourceId = requestedResourceId;
+
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (request)");
 					break;
@@ -147,27 +150,32 @@ int main(int argc, char *argv[]) {
 					perror("msgrcv (response))");
 				} else {
 					if (worker_response.status == 1) {
-						printf("USER_PROC received resource granted or termination confirmation.\n");
+						printf("Process %d granted resource %d\n", getpid(), requestedResourceId);
+						myResources[requestedResourceId]++; //Use correct Id
+
 					} else {
-						printf("USER_PROC received resource denied.\n");
+						printf("Process %d denied resource %d.\n", getpid(), requestedResourceId);
 					}
 				}
-				printf("USER_PROC received: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
-				if (worker_response.status == 1) {
-					printf("Process %d granted resource %d\n", getpid(), resourceId);
-					myResources[resourceId]++; //increment resource count
-				} else {
-					printf("Process %d denied resource %d\n", getpid(), resourceId);
+				//printf("USER_PROC received: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
+				//if (worker_response.status == 1) {
+				//	printf("Process %d granted resource %d\n", getpid(), resourceId);
+				//	myResources[resourceId]++; //increment resource count
+				//} else {
+					//printf("Process %d denied resource %d\n", getpid(), resourceId);
 					//Optionally handle denial (e.g., wait and retry, request a different resource)
-				}
+				//}
 			}
 		} else {
 			//Release a resource
 			if (myResources[resourceId] > 0) {
+				int releaseResourceId = resourceId; // keep local
+
 				struct oss_message oss_msg = {0}; //zero out
 				oss_msg.mtype = getpid();
 				oss_msg.command = RELEASE_RESOURCE;
-				oss_msg.resourceId = rand() % MAX_RESOURCES;
+				oss_msg.resourceId = releaseResourceId;
+
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (release)");
 					break;
