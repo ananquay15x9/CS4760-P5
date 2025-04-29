@@ -621,34 +621,83 @@ int main(int argc, char *argv[]) {
 		struct oss_message oss_msg;
 		if (msgrcv(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0, IPC_NOWAIT) != -1) {
 		printf("OSS received: mtype=%ld, command=%d, resourceId=%d\n", oss_msg.mtype, oss_msg.command, oss_msg.resourceId);
+
+		//Validate ResourceId
+		if (oss_msg.resourceId < 0 || oss_msg.resourceId >= NUM_RESOURCES) {
+			oss_log("OSS Warning: Invalid resource ID %d from process %ld. Ignoring request.\n",
+					oss_msg.resourceId, oss_msg.mtype);
+			continue; //skip invalid message
+		}
+
 			// Message received
 			switch (oss_msg.command) {
 				case REQUEST_RESOURCE: {
-					if (verbose) oss_log("OSS: Received request for resource %d from process %ld\n",
-						oss_msg.resourceId, oss_msg.mtype);
-					int granted = handleResourceRequest(oss_msg.mtype, oss_msg.resourceId);
-					if (granted == 1) {
+					int granted = 0;
+					if (available[oss_msg.resourceId] > 0) {
+						int processIndex = -1;
+						for (int i = 0; i < 18; i++) {
+							if (processTable[i].pid == oss_msg.mtype) {
+								processIndex = i;
+								break;
+							}
+						}
+						if (processIndex != -1) {
+							available[oss_msg.resourceId]--;
+							allocation[processIndex][oss_msg.resourceId]++;
+							need[processIndex][oss_msg.resourceId]--;
+							granted = 1;
+						}
+					}
+
+					if (granted) {
 						oss_log("OSS: Granted resource %d to process %ld at time %u:%u\n",
 							oss_msg.resourceId, oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
 						send_message_to_worker(oss_msg.mtype, 1);
 						stat_requests_granted_immediately++;
 					} else {
-						oss_log("OSS: Not enough resources for process %ld, adding to wait queue at time %u:%u\n", oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
+						oss_log("OSS: Not enough resources for process %ld, adding to wait queue at time %u:%u\n", 
+								oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
 						addToWaitQueue(oss_msg.mtype, oss_msg.resourceId);
 					}
 					break;
 				}
-				case RELEASE_RESOURCE:
-					if (verbose) oss_log("OSS: Received release of resource %d from process %ld at time %u:%u\n",
-						oss_msg.resourceId, oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
-					handleResourceRelease(oss_msg.mtype, oss_msg.resourceId);
+				case RELEASE_RESOURCE: {
+					int processIndex = -1;
+					for (int i = 0; i < 18; i++) {
+						if (processTable[i].pid == oss_msg.mtype) {
+							processIndex = i;
+							break;
+						}
+					}
+					if (processIndex != -1 && allocation[processIndex][oss_msg.resourceId] > 0) {
+						available[oss_msg.resourceId]++;
+						allocation[processIndex][oss_msg.resourceId]--;
+						need[processIndex][oss_msg.resourceId]++;
+						oss_log("OSS: Process %ld released resource %d. \n", oss_msg.mtype, oss_msg.resourceId);
+					}
 					processWaitQueue(); //try to grant blocked requests after a release
 					break;
-				case TERMINATE:
-					oss_log("OSS: Received terminate request from process %ld at time %u:%u\n",
-						oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
+				}
+				case TERMINATE: {
+					int processIndex = -1;
+					for (int i = 0; i < 18; i++) {
+						if (processTable[i].pid == oss_msg.mtype) {
+							processIndex = i;
+							break;
+						}
+					}
+					if (processIndex != -1) {
+						for (int j = 0; j < NUM_RESOURCES; j++) {
+							available[j] += allocation[processIndex][j];
+							allocation[processIndex][j] = 0;
+							need[processIndex][j] = max[processIndex][j];
+						}
+						processTable[processIndex].pid = 0;
+					}
 					send_message_to_worker(oss_msg.mtype, 1); // Send confirmation so user_proc can exit
+					stat_normal_terminations++;
 					break;
+				}
 				default: 
 					oss_log("OSS: Unknown message command %d from process %ld\n",
 						oss_msg.command, oss_msg.mtype);
