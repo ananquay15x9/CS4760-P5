@@ -4,6 +4,13 @@
 #ifndef SHARED_H_
 #define SHARED_H_
 
+//Resource management constants
+#define NUM_RESOURCES 5
+#define NUM_INSTANCES 10
+#define REQUEST_RESOURCE 1
+#define RELEASE_RESOURCE 2
+#define TERMINATE 3
+
 #pragma pack(push, 1)
 
 

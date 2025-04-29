@@ -20,7 +20,7 @@
 
 //Constants (These could also be in a header file)
 #define MSGKEY 12345
-#define MAX_PROCESSES 40
+#define MAX_PROCESSES 18
 #define MAX_RUNTIME_SECONDS 3
 #define NUM_RESOURCES 5
 #define NUM_INSTANCES 10
@@ -28,7 +28,7 @@
 #define RELEASE_RESOURCE 2
 #define TERMINATE 3
 #define LOG_LINE_LIMIT 10000
-
+#define DEFAULT_LAUNCH_INTERVAL_MS 100 //Default launch interval if not specified
 // Statistics tracking
 int stat_requests_granted_immediately = 0;
 int stat_requests_granted_after_wait = 0;
@@ -451,48 +451,94 @@ void oss_log(const char *fmt, ...) {
 
 //Helper to print resource table
 void printResourceTable() {
-	oss_log("Current system resources (available/total):\n");
-	for (int i = 0; i < NUM_RESOURCES; i++) {
-		if (i >= 0 && i < NUM_RESOURCES) { //Guard even if loop is bad
-			oss_log("R%d: %d/%d  ", i, available[i], NUM_INSTANCES);
-		}
+	char buffer[1024] = {0};
+	int offset = 0;
+
+	offset += snprintf(buffer + offset, sizeof(buffer) - offset,
+			"Current system resources (available/total):\n");
+		
+	for (int i = 0; i < NUM_RESOURCES && offset < sizeof(buffer); i++) {
+		//Ensure resource ID is valid
+		if (i < 0 || i >= NUM_RESOURCES) continue;
+
+		//Get available instances with bounds checking
+		int avail = available[i];
+		if (avail < 0) avail = 0;
+		if (avail > NUM_INSTANCES) avail = NUM_INSTANCES;
+
+		// Format each resource entry
+		offset += snprintf(buffer + offset, sizeof(buffer) - offset, 
+				"R%-2d: %2d/%-2d  ", i, avail, NUM_INSTANCES);
 	}
-	oss_log("\n");
+
+	offset += snprintf(buffer + offset, sizeof(buffer) - offset, "\n");
+	
+	// Write the complete buffer to log
+	if (logfile) fprintf(logfile, "%s", buffer);
+	printf("%s", buffer);
 }
 
 // Helper to print process table
 void printProcessTable() {
-	oss_log("Current process allocations:\n  ");
-	for (int i = 0; i < NUM_RESOURCES; i++) {
-		if (i >= 0 && i < NUM_RESOURCES) { //Logging guard
-			oss_log("R%d ", i);
-		}
-	}
-	oss_log("\n");
+	char buffer[2048] = {0}; //Larger buffer for process table
+	int offset = 0;
 
-	for (int i = 0; i < 18; i++) {
+	//Print header
+	offset += snprintf(buffer + offset, sizeof(buffer) - offset, 
+					  "Current process allocations:\n  ");
+
+	//Print resource IDs header
+	for (int i = 0; i < NUM_RESOURCES && offset < sizeof(buffer); i++) {
+		offset += snprintf(buffer + offset, sizeof(buffer) - offset, "R%-2d ", i);
+	}
+	offset += snprintf(buffer + offset, sizeof(buffer) - offset, "\n");
+
+	//Print process allocations
+	for (int i = 0; i < 18 && offset < sizeof(buffer); i++) {
 		if (processTable[i].pid != 0) {
-			oss_log("P%d", i);
-			for (int j = 0; j < NUM_RESOURCES; j++) {
-				if (j >= 0 && j < NUM_RESOURCES) {
-					oss_log("%2d ", allocation[i][j]);
-				}
+			offset += snprintf(buffer + offset, sizeof(buffer) - offset, "P%-2d ", i);
+			
+			for (int j = 0; j < NUM_RESOURCES && offset < sizeof(buffer); j++) {
+				// Validate allocation value
+				int alloc = allocation[i][j];
+				if (alloc < 0) alloc = 0;
+				if (alloc > NUM_INSTANCES) alloc = NUM_INSTANCES;
+				
+				offset += snprintf(buffer + offset, sizeof(buffer) - offset, "%2d  ", alloc);
 			}
-			oss_log("\n");
+			offset += snprintf(buffer + offset, sizeof(buffer) - offset, "\n");
 		}
 	}
+
+	//Write the complete buffer to log
+	if (logfile) fprintf(logfile, "%s", buffer);
+	printf("%s", buffer);
 }
 
 // Helper to print statistics
 void printStatistics() {
-	oss_log("\n==== Simulation Statistics ====\n");
-    	oss_log("Requests granted immediately: %d\n", stat_requests_granted_immediately);
-    	oss_log("Requests granted after waiting: %d\n", stat_requests_granted_after_wait);
-    	oss_log("Processes terminated by deadlock: %d\n", stat_deadlock_terminations);
-    	oss_log("Processes terminated normally: %d\n", stat_normal_terminations);
-    	oss_log("Deadlock detection runs: %d\n", stat_deadlock_detection_runs);
-    	oss_log("Processes terminated per deadlock event: %d\n", stat_deadlock_processes_terminated);
-    	oss_log("===============================\n\n");
+	char buffer[512] = {0};
+	int offset = 0;
+
+	offset += snprintf(buffer + offset, sizeof(buffer) - offset,
+		"\n==== Simulation Statistics ====\n"
+		"Requests granted immediately: %d\n"
+		"Requests granted after waiting: %d\n"
+		"Processes terminated by deadlock: %d\n"
+		"Processes terminated normally: %d\n"
+		"Deadlock detection runs: %d\n"
+		"Processes terminated per deadlock event: %d\n"
+		"===============================\n\n",
+		stat_requests_granted_immediately,
+		stat_requests_granted_after_wait,
+		stat_deadlock_terminations,
+		stat_normal_terminations,
+		stat_deadlock_detection_runs,
+		stat_deadlock_processes_terminated);
+
+	// Write the complete buffer to log
+	if (logfile) fprintf(logfile, "%s", buffer);
+	printf("%s", buffer);
 }
 
 // SIGINT handler for cleanup on Ctrl+C
@@ -523,22 +569,49 @@ void handle_sigint(int sig) {
     	exit(0);
 }
 
+
+// Add launch interval to global variables
+int launch_interval_ms = DEFAULT_LAUNCH_INTERVAL_MS;
+unsigned int last_launch_time_ns = 0;
+unsigned int last_launch_time_s = 0;
+
+//Add to global variables
+unsigned int last_deadlock_check_s = 0;
+
 int main(int argc, char *argv[]) {
 	//Register SIGINT handler for cleanup
 	signal(SIGINT, sigint_handler);
 
-	//4. Main Loop
+	//Initialize process tracking
 	int totalProcesses = 0;
+	int runningChildren = 0;
 
 	//Command line argument parsing 
 	char *logfilename = NULL;
-	for (int i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
-			logfilename = argv[++i];
-		} else if (strcmp(argv[i], "-v") == 0) {
-			verbose = 1;
+	int opt;
+	while ((opt = getopt(argc, argv, "hi:n:s:f:")) != -1) {
+		switch (opt) {
+			case 'h':
+				printf("Usage: %s [-h] [-n proc] [-s simul] [-i intervalInMsToLaunchChildren] [-f logfile]\n", argv[0]);
+				return 0;
+			case 'i':
+				launch_interval_ms = atoi(optarg);
+				if (launch_interval_ms <= 0) {
+					fprintf(stderr, "Invalid launch interval. Using default %d ms\n", DEFAULT_LAUNCH_INTERVAL_MS);
+					launch_interval_ms = DEFAULT_LAUNCH_INTERVAL_MS;
+				}
+				break;
+			case 'f':
+				logfilename = optarg;
+				break;
+			case 'n':
+			case 's':
+				// Store these parameters if needed
+				break;
 		}
 	}
+
+
 	if (logfilename) {
 		logfile = fopen(logfilename, "w");
 		if (!logfile) {
@@ -562,39 +635,36 @@ int main(int argc, char *argv[]) {
 	}
 
 	//Clear OSS arrays
-	memset(resourceTable, 0, sizeof(resourceTable));
-    	memset(available, 0, sizeof(available));
-    	memset(allocation, 0, sizeof(allocation));
-    	memset(max, 0, sizeof(max));
-    	memset(need, 0, sizeof(need));
-    	memset(processTable, 0, sizeof(processTable));
+	memset(resourceTable, 0, sizeof(ResourceDescriptor) * NUM_RESOURCES);
+	memset(available, 0, sizeof(int) * NUM_RESOURCES);
+	memset(allocation, 0, sizeof(int) * 18 * NUM_RESOURCES);
+	memset(max, 0, sizeof(int) * 18 * NUM_RESOURCES);
+	memset(need, 0, sizeof(int) * 18 * NUM_RESOURCES);
+	memset(processTable, 0, sizeof(PCB) * 18);
 
-	// Initialize resource table
-	initializeResourceTable();
-
-	//Initialize available
+	// Initialize resources with explicit bounds checking
 	for (int i = 0; i < NUM_RESOURCES; i++) {
-		available[i] = NUM_INSTANCES; //Initially, all instances are available
-	}
-
-	//Initialize max
-	for (int i = 0; i < 18; i++) {
-		for (int j = 0; j < NUM_RESOURCES; j++) {
-			max[i][j] = NUM_INSTANCES / 2;
+		if (i >= 0 && i < NUM_RESOURCES) {  // Extra validation
+			resourceTable[i].totalInstances = NUM_INSTANCES;
+			resourceTable[i].availableInstances = NUM_INSTANCES;
+			available[i] = NUM_INSTANCES;
+			
+			for (int j = 0; j < 18; j++) {
+				resourceTable[i].allocated[j] = 0;
+				allocation[j][i] = 0;
+				max[j][i] = NUM_INSTANCES / 2;  // Maximum demand is half of total
+				need[j][i] = max[j][i];
+			}
 		}
 	}
 
-	//Initialize allocation
-	for (int i = 0; i < 18; i++) {
-		for (int j = 0; j < NUM_RESOURCES; j++) {
-			allocation[i][j] = 0;
-		}
-	}
-
-	//Initialize need
-	for (int i = 0; i < 18; i++) {
-		for (int j = 0; j < NUM_RESOURCES; j++) {
-			need[i][j] = max[i][j] - allocation[i][j];
+	//Verify initialization
+	for (int i = 0; i < NUM_RESOURCES; i++) {
+		if (available[i] != NUM_INSTANCES) {
+			fprintf(stderr, "Resource initialization error for R%d\n", i);
+			cleanup_shared_memory();
+			if (logfile) fclose(logfile);
+			return 1;
 		}
 	}
 
@@ -610,78 +680,94 @@ int main(int argc, char *argv[]) {
 			simClock->nanoseconds -= 1000000000;
 		}
 
-		//b. Launch child processes
-		if (totalProcesses < 5) { // Launch initial 5 processes
-			pid_t pid = fork();
-			if (pid == 0) {
-				//Child process
-				char bound_B_str[20];
-				sprintf(bound_B_str, "%d", 100000); // Example bound_B value
-				execl("./user_proc", "user_proc", bound_B_str, NULL);
-				perror("execl");
-				exit(1);
-			} else if (pid > 0) {
-				//Parent process
-				int slot = -1;
-				for (int i = 0; i < 18; i++) {
-					if (processTable[i].pid == 0) {
-						slot = i;
-						break;
+		//Check if it's time to launch a new process
+		unsigned int elapsed_ns = (simClock->seconds - last_launch_time_s) * 1000000000 + 
+								(simClock->nanoseconds - last_launch_time_ns);
+		
+		if (elapsed_ns >= (launch_interval_ms * 1000000)) {  // Convert ms to ns
+			//Update running children count
+			runningChildren = 0;
+			for (int i = 0; i < MAX_PROCESSES; i++) {
+				if (processTable[i].pid != 0) runningChildren++;
+			}
+
+			if (runningChildren < MAX_PROCESSES && totalProcesses < MAX_PROCESSES) {
+				pid_t pid = fork();
+				if (pid == 0) {
+					//Child process
+					char bound_B_str[20];
+					sprintf(bound_B_str, "%d", 100000);
+					execl("./user_proc", "user_proc", bound_B_str, NULL);
+					perror("execl");
+					exit(1);
+				} else if (pid > 0) {
+					//Parent process
+					int slot = -1;
+					for (int i = 0; i < MAX_PROCESSES; i++) {
+						if (processTable[i].pid == 0) {
+							slot = i;
+							break;
+						}
+					}
+					if (slot != -1) {
+						processTable[slot].pid = pid;
+						printf("OSS: Launched child process %d in slot %d\n", pid, slot);
+						totalProcesses++;
+						last_launch_time_s = simClock->seconds;
+						last_launch_time_ns = simClock->nanoseconds;
 					}
 				}
-				if (slot != -1) {
-					processTable[slot].pid = pid;
-					oss_log("OSS: Launched child process %d in slot %d\n", pid, slot);
-					totalProcesses++;
-				} else {
-					oss_log("OSS: No available slot for new processes!\n");
-				}
-			} else {
-				perror("fork");
 			}
 		}
 
-		//c. Check for messages from user processes
+		//b. Check for messages from user processes
 		struct oss_message oss_msg;
 		if (msgrcv(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0, IPC_NOWAIT) != -1) {
-		printf("OSS received: mtype=%ld, command=%d, resourceId=%d\n", oss_msg.mtype, oss_msg.command, oss_msg.resourceId);
-
-		//Validate ResourceId
-		if (oss_msg.resourceId < 0 || oss_msg.resourceId >= NUM_RESOURCES) {
-			oss_log("OSS Warning: Invalid resource ID %d from process %ld. Ignoring request.\n",
+			//Strict resource ID validation
+			if (oss_msg.resourceId < 0 || oss_msg.resourceId >= NUM_RESOURCES) {
+				fprintf(stderr, "OSS Warning: Invalid resource ID %d from process %ld\n",  
 					oss_msg.resourceId, oss_msg.mtype);
-			continue; //skip invalid message
-		}
+				send_message_to_worker(oss_msg.mtype, 0); //Deny invalid requests
+				continue;
+			}
 
 			// Message received
 			switch (oss_msg.command) {
 				case REQUEST_RESOURCE: {
-					int granted = 0;
-					if (available[oss_msg.resourceId] > 0) {
-						int processIndex = -1;
-						for (int i = 0; i < 18; i++) {
-							if (processTable[i].pid == oss_msg.mtype) {
-								processIndex = i;
-								break;
-							}
-						}
-						if (processIndex != -1) {
-							available[oss_msg.resourceId]--;
-							allocation[processIndex][oss_msg.resourceId]++;
-							need[processIndex][oss_msg.resourceId]--;
-							granted = 1;
+					// Find process index
+					int processIndex = -1;
+					for (int i = 0; i < 18; i++) {
+						if (processTable[i].pid == oss_msg.mtype) {
+							processIndex = i;
+							break;
 						}
 					}
 
-					if (granted) {
-						oss_log("OSS: Granted resource %d to process %ld at time %u:%u\n",
-							oss_msg.resourceId, oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
+					if (processIndex == -1) {
+						fprintf(stderr, "OSS Warning: Request from unknown process %ld\n", oss_msg.mtype);
+						continue;
+					}
+
+					// Check if request is valid
+					if (allocation[processIndex][oss_msg.resourceId] >= NUM_INSTANCES) {
+						fprintf(stderr, "OSS Warning: Process %ld requesting too many instances of R%d\n",
+								oss_msg.mtype, oss_msg.resourceId);
+						send_message_to_worker(oss_msg.mtype, 0);
+						continue;
+					}
+		
+					//Try to grant the request
+					int granted = handleResourceRequest(oss_msg.mtype, oss_msg.resourceId);
+					if (granted == 1) {
+						printf("OSS: Granted resource R%d to process %ld\n",
+							oss_msg.resourceId, oss_msg.mtype);
 						send_message_to_worker(oss_msg.mtype, 1);
 						stat_requests_granted_immediately++;
 					} else {
-						oss_log("OSS: Not enough resources for process %ld, adding to wait queue at time %u:%u\n", 
-								oss_msg.mtype, simClock->seconds, simClock->nanoseconds);
+						printf("OSS: Resource R%d not available for process %ld\n",
+							oss_msg.resourceId, oss_msg.mtype);
 						addToWaitQueue(oss_msg.mtype, oss_msg.resourceId);
+						send_message_to_worker(oss_msg.mtype, 0);
 					}
 					break;
 				}
@@ -757,52 +843,27 @@ int main(int argc, char *argv[]) {
 			if (processTable[i].pid != 0) runningChildren++;
 		}
 
-		//e. Deadlock detection (every second)
-		if (simClock->seconds % 1 == 0 && simClock->nanoseconds == 0) {
-			//Run deadlock detection algorithm 
+		// Deadlock detection (every second)
+		if (simClock->seconds > last_deadlock_check_s) {
+			last_deadlock_check_s = simClock->seconds;
+			if (verbose) {
+				printf("OSS: Running deadlock detection at time %u:%u\n", 
+					   simClock->seconds, simClock->nanoseconds);
+			}
 			detectAndResolveDeadlock();
 		}
 
-		//f. Output resource and process tables (every half second)
+		//Resource table output (every half second)
 		if ((simClock->nanoseconds % 500000000) == 0) {
-			printResourceTable();
-			printProcessTable();
+			if (verbose) {
+				printResourceTable();
+				printProcessTable();
+			}
 		}
 		
 		//At the end of each loop, try to process the wait queue
 		processWaitQueue();
 
-
-		//Only fork if there are fewer than 18 running
-		if (runningChildren < 18 && totalProcesses < MAX_PROCESSES) {
-			pid_t pid = fork();
-			if (pid == 0) {
-				//Child process
-				char bound_B_str[20];
-				sprintf(bound_B_str, "%d", 100000); //bound_b value
-				execl("./user_proc", "user_proc", bound_B_str, NULL);
-				perror("execl");
-				exit(1);
-			} else if (pid > 0) {
-				//Parent process
-				int slot = -1;
-				for (int i = 0; i < 18; i++) {
-					if (processTable[i].pid == 0) {
-						slot = i;
-						break;
-					}
-				}
-				if (slot != -1) {
-					processTable[slot].pid = pid;
-					oss_log("OSS: Launched child process %d in slot %d\n", pid, slot);
-					totalProcesses++;
-				} else {
-					oss_log("OSS: No available slot for new processes!\n");
-				}
-			} else {
-				perror("fork");
-			}
-		}
 
 		//print resource and process tables every 20 grants
 		if ((stat_requests_granted_immediately + stat_requests_granted_after_wait) % 20 == 0) {
