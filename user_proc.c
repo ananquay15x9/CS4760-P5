@@ -135,10 +135,7 @@ int main(int argc, char *argv[]) {
 				struct oss_message oss_msg = {0}; //zero out
 				oss_msg.mtype = getpid();
 				oss_msg.command = REQUEST_RESOURCE;
-				oss_msg.resourceId = resourceId;
-				printf("Process %d requesting resource %d at time %u:%u\n",
-					getpid(), resourceId, simClock->seconds, simClock->nanoseconds);
-				printf("USER_PROC sending: mtype=%ld, command=%d, resourceId=%d\n", oss_msg.mtype, oss_msg.command, oss_msg.resourceId); //debug print
+				oss_msg.resourceId = rand() % MAX_RESOURCES;
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (request)");
 					break;
@@ -170,9 +167,7 @@ int main(int argc, char *argv[]) {
 				struct oss_message oss_msg = {0}; //zero out
 				oss_msg.mtype = getpid();
 				oss_msg.command = RELEASE_RESOURCE;
-				oss_msg.resourceId = resourceId;
-				printf("Process %d releasing resource %d at time %u:%u\n",
-					getpid(), resourceId, simClock->seconds, simClock->nanoseconds);
+				oss_msg.resourceId = rand() % MAX_RESOURCES;
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (release)");
 					break;
@@ -192,9 +187,9 @@ int main(int argc, char *argv[]) {
 			if (simClock->seconds > 1 && ((double)rand() / RAND_MAX) < 0.15) {
 				//send message to oss to terminate
 				struct oss_message oss_msg = {0}; //zero out
+				oss_msg.mtype = getpid();
 				oss_msg.command = TERMINATE;
 				oss_msg.resourceId = 0; //clear resourceId
-				oss_msg.mtype = getpid();
 				if (msgsnd(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0) == -1) {
 					perror("msgsnd (terminate)");
 				} else {
