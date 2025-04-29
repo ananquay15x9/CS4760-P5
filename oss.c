@@ -669,8 +669,8 @@ int main(int argc, char *argv[]) {
 	}
 
 
-	printf("sizeof(struct oss_message) = %zu\n", sizeof(struct oss_message));
-	printf("sizeof(struct worker_message) = %zu\n", sizeof(struct worker_message));
+	//printf("sizeof(struct oss_message) = %zu\n", sizeof(struct oss_message));
+	//printf("sizeof(struct worker_message) = %zu\n", sizeof(struct worker_message));
 
 	while (1) {
 		//a. Increment the clock

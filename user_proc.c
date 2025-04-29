@@ -131,15 +131,16 @@ int main(int argc, char *argv[]) {
 
 	//Track resources and start time
 	int myResources[NUM_RESOURCES] = {0};
-	unsigned int start_sec = simClock->seconds;
-	unsigned int start_ns = simClock->nanoseconds;
+	//unsigned int start_sec = simClock->seconds;
+	//unsigned int start_ns = simClock->nanoseconds;
 	int total_requests = 0;
 	int consecutive_denials = 0;
 	int total_held = 0;
-	bool has_waited = false;
+	//bool has_waited = false;
+	int operations_since_last_release = 0;
 
-	//Wait a bit before starting to stagger processes
-	usleep(rand() % (bound_B * 2));
+	// Initial delay to stagger processes
+	usleep(rand() % 100000);
 
 	//Main process loop
 	while (!terminating) {
@@ -151,39 +152,18 @@ int main(int argc, char *argv[]) {
 		}
 
 		// Check if we should terminate normally
-		bool should_terminate = false;
-		if (total_requests >= 8 && (rand() % 100 < 15)) {  // 15% chance after 8 requests
-			should_terminate = true;
-		}
-
-		if (should_terminate || consecutive_denials >= 5) {
-			// Release all resources before terminating
-			bool all_released = true;
-			for (int i = 0; i < NUM_RESOURCES; i++) {
-				while (myResources[i] > 0 && !terminating) {
-					if (send_message(RELEASE_RESOURCE, i)) {
-						myResources[i]--;
-						total_held--;
-					
-						usleep(1000);  // Small delay between releases
-					} else {
-						all_released = false;
-						break;
-					}
-				}
-			}
-
-		// Only terminate if all resources are released
-			if (all_released && total_held == 0) {
+		if (total_requests >= 5 && total_held == 0) {
+			if (rand() % 100 < 25) { // 25% chance to terminate when holding no resources
 				if (send_message(TERMINATE, 0)) {
 					break;  // Normal termination
 				}
 			}
 		}
 
-		// Request or release resources
-		if (!should_terminate && total_held < MAX_RESOURCES_PER_PROCESS && total_requests < MAX_REQUESTS) {
-			if (rand() % 100 < 70 || total_held == 0) {  // 70% chance to request
+		// Main resource management
+		if (total_requests < MAX_REQUESTS) {
+			if (total_held == 0 || (total_held < MAX_RESOURCES_PER_PROCESS && rand() % 100 < 75)) {
+				// Request a resource
 				int resourceId = rand() % NUM_RESOURCES;
 				if (myResources[resourceId] < 2) {  // Maximum 2 of any resource
 					total_requests++;
@@ -191,14 +171,18 @@ int main(int argc, char *argv[]) {
 						myResources[resourceId]++;
 						total_held++;
 						consecutive_denials = 0;
+						operations_since_last_release++;
+						
+						// Hold the resource for a while
+						usleep(rand() % 500000 + 100000);
 					} else {
 						consecutive_denials++;
-						has_waited = true;
-						usleep(rand() % 1000000);  // Wait up to 1 second
+						// Wait after denial, increasing wait time with consecutive denials
+						usleep((rand() % 500000) * (consecutive_denials + 1));
 					}
 				}
-			} else if (total_held > 0) {
-				// Release a random held resource
+			} else if (operations_since_last_release >= 3 || total_held == MAX_RESOURCES_PER_PROCESS) {
+				// Release a resource after some operations or when at max
 				int resourceId;
 				do {
 					resourceId = rand() % NUM_RESOURCES;
@@ -207,13 +191,25 @@ int main(int argc, char *argv[]) {
 				if (send_message(RELEASE_RESOURCE, resourceId)) {
 					myResources[resourceId]--;
 					total_held--;
+					operations_since_last_release = 0;
+				}
+			}
+		} else if (total_held > 0) {
+			// Release all resources if we've hit max requests
+			for (int i = 0; i < NUM_RESOURCES; i++) {
+				while (myResources[i] > 0) {
+					if (send_message(RELEASE_RESOURCE, i)) {
+						myResources[i]--;
+						total_held--;
+						usleep(10000); // Small delay between releases
+					}
 		
 				}
 			}
 		}
 
-		// Longer delay between operations to allow other processes to work
-		usleep(bound_B + (rand() % bound_B));
+		// Delay between operations
+		usleep(rand() % bound_B + 50000);
 	}
 	
 	// Final cleanup if terminated by signal
