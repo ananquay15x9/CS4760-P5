@@ -185,6 +185,14 @@ int handleResourceRequest(int pid, int resourceId) {
 		resourceTable[resourceId].allocated[processIndex]++;
 		allocation[processIndex][resourceId]++; //update allocation
 		need[processIndex][resourceId]--; //update need
+
+		//Update statistics
+		if (waitQueueSize > 0) {
+			stat_requests_granted_after_wait++;
+		} else {
+			stat_requests_granted_immediately++;
+		}
+
 		return 1; //Granted
 	} else {
 		return 0; //Denied (unsafe state)
@@ -255,12 +263,29 @@ int setup_shared_memory() {
 
 //Function to clean up shared memory
 void cleanup_shared_memory() {
-	if (simClock != (SimulatedClock *)-1) {
-		shmdt(simClock);
+	//Send SIGTERM to all active children
+	for (int i = 0; i < 18; i++) {
+		if (processTable[i].pid != 0) {
+            		kill(processTable[i].pid, SIGTERM);
+        	}
 	}
-	if (shmid != -1) {
-		shmctl(shmid, IPC_RMID, NULL); //Mark for destruction
-	}
+	
+	//Wait for all children to exit
+	while (wait(NULL) > 0); //This ensures wait for all children
+
+	//if (simClock != (SimulatedClock *)-1) {
+	//	shmdt(simClock);
+	//}
+	//if (shmid != -1) {
+	//	shmctl(shmid, IPC_RMID, NULL); //Mark for destruction
+	//}
+
+	//Clean up IPC resources
+	shmdt(simClock);
+    	shmctl(shmid, IPC_RMID, NULL);
+    	msgctl(msqid, IPC_RMID, NULL);
+    
+    	if (logfile) fclose(logfile);
 }
 
 //Function to check if the system is in a safe state
@@ -724,19 +749,21 @@ int main(int argc, char *argv[]) {
 		struct oss_message oss_msg;
 		if (msgrcv(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0, IPC_NOWAIT) != -1) {
 			//Strict resource ID validation
-			if (oss_msg.resourceId < 0 || oss_msg.resourceId >= NUM_RESOURCES) {
-				fprintf(stderr, "OSS Warning: Invalid resource ID %d from process %ld\n",  
-					oss_msg.resourceId, oss_msg.mtype);
-				send_message_to_worker(oss_msg.mtype, 0); //Deny invalid requests
+			if (oss_msg.command != REQUEST_RESOURCE && 
+				oss_msg.command != RELEASE_RESOURCE && 
+				oss_msg.command != TERMINATE) {
+				oss_log("OSS Warning: Invalid command %d from process %d\n", 
+						oss_msg.command, oss_msg.mtype);
 				continue;
 			}
 
-			//Basic validation
-			if (oss_msg.command != REQUEST_RESOURCE && oss_msg.command != RELEASE_RESOURCE && oss_msg.command != TERMINATE) {
-				oss_log("OSS Warning: Received invalid command %d from process %ld. Ignoring.\n",
-					oss_msg.command, oss_msg.mtype);
-				continue; // Skip processing this message
+			if (oss_msg.resourceId < 0 || oss_msg.resourceId >= NUM_RESOURCES) {
+				oss_log("OSS Warning: Invalid resource ID %d from process %d\n", 
+						oss_msg.resourceId, oss_msg.mtype);
+				continue;
 			}
+
+
 
 			// Message received
 			switch (oss_msg.command) {

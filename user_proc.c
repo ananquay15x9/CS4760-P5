@@ -165,21 +165,23 @@ int main(int argc, char *argv[]) {
 			if (total_held == 0 || (total_held < MAX_RESOURCES_PER_PROCESS && rand() % 100 < 75)) {
 				// Request a resource
 				int resourceId = rand() % NUM_RESOURCES;
-				if (myResources[resourceId] < 2) {  // Maximum 2 of any resource
-					total_requests++;
-					if (send_message(REQUEST_RESOURCE, resourceId)) {
-						myResources[resourceId]++;
-						total_held++;
-						consecutive_denials = 0;
-						operations_since_last_release++;
-						
-						// Hold the resource for a while
-						usleep(rand() % 500000 + 100000);
-					} else {
-						consecutive_denials++;
-						// Wait after denial, increasing wait time with consecutive denials
-						usleep((rand() % 500000) * (consecutive_denials + 1));
-					}
+				if (total_held >= MAX_RESOURCES_PER_PROCESS || myResources[resourceId] >= 2) {
+					// Skip request and maybe try to release instead
+					continue;
+				}
+				total_requests++;
+				if (send_message(REQUEST_RESOURCE, resourceId)) {
+					myResources[resourceId]++;
+					total_held++;
+					consecutive_denials = 0;
+					operations_since_last_release++;
+					
+					// Hold the resource for a while
+					usleep(rand() % 500000 + 100000);
+				} else {
+					consecutive_denials++;
+					// Wait after denial, increasing wait time with consecutive denials
+					usleep((rand() % 500000) * (consecutive_denials + 1));
 				}
 			} else if (operations_since_last_release >= 3 || total_held == MAX_RESOURCES_PER_PROCESS) {
 				// Release a resource after some operations or when at max
