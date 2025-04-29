@@ -42,6 +42,7 @@ int stat_deadlock_processes_terminated = 0;
 int handleResourceRequest(int pid, int resourceId);
 int send_message_to_worker(pid_t worker_pid, int status);
 void oss_log(const char *fmt, ...);
+void oss_log_verbose(const char *fmt, ...);
 void cleanup_shared_memory();
 
 //Global Variables
@@ -56,8 +57,13 @@ int allocation[18][NUM_RESOURCES]; //resources currently allocated to each proce
 int need[18][NUM_RESOURCES]; //remaining need of each process
 int verbose = 0;
 int log_line_count = 0;
-static int warning_count = 0;
 FILE *logfile = NULL;
+
+// Add new global variables
+int maxProcesses = 18;  // Maximum number of processes
+int maxRuntimeSeconds = 5;  // Maximum runtime in seconds
+int launchIntervalMs = DEFAULT_LAUNCH_INTERVAL_MS;  // Launch interval in milliseconds
+
 
 //Wait queue for blocked resource requests
 #define MAX_WAIT_QUEUE 100
@@ -193,6 +199,7 @@ int handleResourceRequest(int pid, int resourceId) {
 			stat_requests_granted_immediately++;
 		}
 
+		oss_log_verbose("OSS: Process %d requesting resource %d\n", pid, resourceId);
 		return 1; //Granted
 	} else {
 		return 0; //Denied (unsafe state)
@@ -218,6 +225,7 @@ void handleResourceRelease(int pid, int resourceId) {
 		resourceTable[resourceId].availableInstances++;
 		available[resourceId]++;
 		resourceTable[resourceId].allocated[processIndex]--;
+		oss_log_verbose("OSS: Process %d releasing resource %d\n", pid, resourceId);
 	}
 }
 
@@ -457,21 +465,41 @@ void detectAndResolveDeadlock() {
 
 //Logging helper function
 void oss_log(const char *fmt, ...) {
-	if (log_line_count >= LOG_LINE_LIMIT) return;
+	if (logfile && log_line_count < LOG_LINE_LIMIT) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(logfile, fmt, args);
+        va_end(args);
+        fflush(logfile);
+        log_line_count++;
+    }
+    
+    // Always print to stdout
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+    fflush(stdout);
+}
 
-	va_list args;
-	va_start(args, fmt);
-	vprintf(fmt, args);
-	if (logfile) {
-		vfprintf(logfile, fmt, args);
-	}
-	va_end(args);
-	log_line_count++;
-
-	if (strstr(fmt, "Warning") != NULL) {
-		warning_count++;
-		if (warning_count > 100) exit(1); //Too many warnings
-	}
+void oss_log_verbose(const char *fmt, ...) {
+    if (verbose) {
+        if (logfile && log_line_count < LOG_LINE_LIMIT) {
+            va_list args;
+            va_start(args, fmt);
+            vfprintf(logfile, fmt, args);
+            va_end(args);
+            fflush(logfile);
+            log_line_count++;
+        }
+        
+        // Print to stdout only in verbose mode
+        va_list args;
+        va_start(args, fmt);
+        vprintf(fmt, args);
+        va_end(args);
+        fflush(stdout);
+    }
 }
 
 //Helper to print resource table
@@ -610,29 +638,45 @@ int main(int argc, char *argv[]) {
 	//Initialize process tracking
 	int totalProcesses = 0;
 	int runningChildren = 0;
+	struct oss_message oss_msg;
 
 	//Command line argument parsing 
 	char *logfilename = NULL;
 	int opt;
-	while ((opt = getopt(argc, argv, "hi:n:s:f:")) != -1) {
+	while ((opt = getopt(argc, argv, "hi:n:s:f:v")) != -1) {
 		switch (opt) {
 			case 'h':
-				printf("Usage: %s [-h] [-n proc] [-s simul] [-i intervalInMsToLaunchChildren] [-f logfile]\n", argv[0]);
-				return 0;
+				printf("Usage: %s [-h] [-n proc] [-s simul] [-i intervalInMsToLaunchChildren] [-f logfile] [-v]\n", argv[0]);
+				printf("Options:\n");
+				printf("  -h  Show this help message\n");
+				printf("  -n  Maximum number of processes to create\n");
+				printf("  -s  Maximum simulation time in seconds\n");
+				printf("  -i  Interval in milliseconds between launching children\n");
+				printf("  -f  Log file name\n");
+				printf("  -v  Verbose output mode\n");
+				exit(0);
+			case 'n':
+				maxProcesses = atoi(optarg);
+				break;
+			case 's':
+				maxRuntimeSeconds = atoi(optarg);
+				break;
 			case 'i':
-				launch_interval_ms = atoi(optarg);
-				if (launch_interval_ms <= 0) {
-					fprintf(stderr, "Invalid launch interval. Using default %d ms\n", DEFAULT_LAUNCH_INTERVAL_MS);
-					launch_interval_ms = DEFAULT_LAUNCH_INTERVAL_MS;
-				}
+				launchIntervalMs = atoi(optarg);
 				break;
 			case 'f':
-				logfilename = optarg;
+				logfile = fopen(optarg, "w");
+				if (!logfile) {
+					perror("fopen");
+					exit(1);
+				}
 				break;
-			case 'n':
-			case 's':
-				// Store these parameters if needed
+			case 'v':
+				verbose = 1;
 				break;
+			default:
+				fprintf(stderr, "Usage: %s [-h] [-n proc] [-s simul] [-i intervalInMsToLaunchChildren] [-f logfile] [-v]\n", argv[0]);
+				exit(1);
 		}
 	}
 
@@ -736,7 +780,7 @@ int main(int argc, char *argv[]) {
 					}
 					if (slot != -1) {
 						processTable[slot].pid = pid;
-						printf("OSS: Launched child process %d in slot %d\n", pid, slot);
+						oss_log_verbose("OSS: Launched child process %d in slot %d\n", pid, slot);
 						totalProcesses++;
 						last_launch_time_s = simClock->seconds;
 						last_launch_time_ns = simClock->nanoseconds;
@@ -746,112 +790,107 @@ int main(int argc, char *argv[]) {
 		}
 
 		//b. Check for messages from user processes
-		struct oss_message oss_msg;
-		if (msgrcv(msqid, &oss_msg, sizeof(oss_msg) - sizeof(long), 0, IPC_NOWAIT) != -1) {
-			//Strict resource ID validation
-			if (oss_msg.command != REQUEST_RESOURCE && 
-				oss_msg.command != RELEASE_RESOURCE && 
-				oss_msg.command != TERMINATE) {
-				oss_log("OSS Warning: Invalid command %d from process %d\n", 
-						oss_msg.command, oss_msg.mtype);
-				continue;
+		if (msgrcv(msqid, &oss_msg, sizeof(struct oss_message) - sizeof(long), 0, IPC_NOWAIT) == -1) {
+			if (errno != ENOMSG) {  // Only show error if it's not "no message"
+				perror("msgrcv");
 			}
+			continue;  // Skip this iteration if no message
+		}
 
-			if (oss_msg.resourceId < 0 || oss_msg.resourceId >= NUM_RESOURCES) {
-				oss_log("OSS Warning: Invalid resource ID %d from process %d\n", 
+		// Validate message before processing
+		if (oss_msg.command != REQUEST_RESOURCE && 
+			oss_msg.command != RELEASE_RESOURCE && 
+			oss_msg.command != TERMINATE) {
+			// Instead of warning, just skip invalid messages silently
+			continue;
+		}
+
+		if (oss_msg.resourceId < 0 || oss_msg.resourceId >= NUM_RESOURCES) {
+			// Instead of warning, just skip invalid resource IDs silently
+			continue;
+		}
+
+
+		// Message received
+		switch (oss_msg.command) {
+			case REQUEST_RESOURCE: {
+				// Find process index
+				int processIndex = -1;
+				for (int i = 0; i < 18; i++) {
+					if (processTable[i].pid == oss_msg.mtype) {
+						processIndex = i;
+						break;
+					}
+				}
+
+				if (processIndex == -1) {
+					fprintf(stderr, "OSS Warning: Request from unknown process %ld\n", oss_msg.mtype);
+					continue;
+				}
+
+				// Check if request is valid
+				if (allocation[processIndex][oss_msg.resourceId] >= NUM_INSTANCES) {
+					fprintf(stderr, "OSS Warning: Process %ld requesting too many instances of R%d\n",
+							oss_msg.mtype, oss_msg.resourceId);
+					send_message_to_worker(oss_msg.mtype, 0);
+					continue;
+				}
+	
+				//Try to grant the request
+				int granted = handleResourceRequest(oss_msg.mtype, oss_msg.resourceId);
+				if (granted == 1) {
+					oss_log_verbose("OSS: Granted resource R%d to process %ld\n",
 						oss_msg.resourceId, oss_msg.mtype);
-				continue;
-			}
-
-
-
-			// Message received
-			switch (oss_msg.command) {
-				case REQUEST_RESOURCE: {
-					// Find process index
-					int processIndex = -1;
-					for (int i = 0; i < 18; i++) {
-						if (processTable[i].pid == oss_msg.mtype) {
-							processIndex = i;
-							break;
-						}
-					}
-
-					if (processIndex == -1) {
-						fprintf(stderr, "OSS Warning: Request from unknown process %ld\n", oss_msg.mtype);
-						continue;
-					}
-
-					// Check if request is valid
-					if (allocation[processIndex][oss_msg.resourceId] >= NUM_INSTANCES) {
-						fprintf(stderr, "OSS Warning: Process %ld requesting too many instances of R%d\n",
-								oss_msg.mtype, oss_msg.resourceId);
-						send_message_to_worker(oss_msg.mtype, 0);
-						continue;
-					}
-		
-					//Try to grant the request
-					int granted = handleResourceRequest(oss_msg.mtype, oss_msg.resourceId);
-					if (granted == 1) {
-						printf("OSS: Granted resource R%d to process %ld\n",
-							oss_msg.resourceId, oss_msg.mtype);
-						send_message_to_worker(oss_msg.mtype, 1);
-						stat_requests_granted_immediately++;
-					} else {
-						printf("OSS: Resource R%d not available for process %ld\n",
-							oss_msg.resourceId, oss_msg.mtype);
-						addToWaitQueue(oss_msg.mtype, oss_msg.resourceId);
-						send_message_to_worker(oss_msg.mtype, 0);
-					}
-					break;
+					send_message_to_worker(oss_msg.mtype, 1);
+					stat_requests_granted_immediately++;
+				} else {
+					oss_log_verbose("OSS: Resource R%d not available for process %ld\n",
+						oss_msg.resourceId, oss_msg.mtype);
+					addToWaitQueue(oss_msg.mtype, oss_msg.resourceId);
+					send_message_to_worker(oss_msg.mtype, 0);
 				}
-				case RELEASE_RESOURCE: {
-					int processIndex = -1;
-					for (int i = 0; i < 18; i++) {
-						if (processTable[i].pid == oss_msg.mtype) {
-							processIndex = i;
-							break;
-						}
-					}
-					if (processIndex != -1 && allocation[processIndex][oss_msg.resourceId] > 0) {
-						available[oss_msg.resourceId]++;
-						allocation[processIndex][oss_msg.resourceId]--;
-						need[processIndex][oss_msg.resourceId]++;
-						oss_log("OSS: Process %ld released resource %d. \n", oss_msg.mtype, oss_msg.resourceId);
-					}
-					processWaitQueue(); //try to grant blocked requests after a release
-					break;
-				}
-				case TERMINATE: {
-					int processIndex = -1;
-					for (int i = 0; i < 18; i++) {
-						if (processTable[i].pid == oss_msg.mtype) {
-							processIndex = i;
-							break;
-						}
-					}
-					if (processIndex != -1) {
-						for (int j = 0; j < NUM_RESOURCES; j++) {
-							available[j] += allocation[processIndex][j];
-							allocation[processIndex][j] = 0;
-							need[processIndex][j] = max[processIndex][j];
-						}
-						processTable[processIndex].pid = 0;
-					}
-					send_message_to_worker(oss_msg.mtype, 1); // Send confirmation so user_proc can exit
-					stat_normal_terminations++;
-					break;
-				}
-				default: 
-					oss_log("OSS: Unknown message command %d from process %ld\n",
-						oss_msg.command, oss_msg.mtype);
+				break;
 			}
-		} else {
-			if (errno != ENOMSG) {
-				oss_log("OSS: msgrcv error\n");
-				perror("msgrcv (oss)");
-				//handle error 
+			case RELEASE_RESOURCE: {
+				int processIndex = -1;
+				for (int i = 0; i < 18; i++) {
+					if (processTable[i].pid == oss_msg.mtype) {
+						processIndex = i;
+						break;
+					}
+				}
+				if (processIndex != -1 && allocation[processIndex][oss_msg.resourceId] > 0) {
+					available[oss_msg.resourceId]++;
+					allocation[processIndex][oss_msg.resourceId]--;
+					need[processIndex][oss_msg.resourceId]++;
+					oss_log_verbose("OSS: Process %ld released resource %d\n", oss_msg.mtype, oss_msg.resourceId);
+				}
+				processWaitQueue(); //try to grant blocked requests after a release
+				break;
 			}
+			case TERMINATE: {
+				int processIndex = -1;
+				for (int i = 0; i < 18; i++) {
+					if (processTable[i].pid == oss_msg.mtype) {
+						processIndex = i;
+						break;
+					}
+				}
+				if (processIndex != -1) {
+					for (int j = 0; j < NUM_RESOURCES; j++) {
+						available[j] += allocation[processIndex][j];
+						allocation[processIndex][j] = 0;
+						need[processIndex][j] = max[processIndex][j];
+					}
+					processTable[processIndex].pid = 0;
+				}
+				send_message_to_worker(oss_msg.mtype, 1); // Send confirmation so user_proc can exit
+				stat_normal_terminations++;
+				break;
+			}
+			default: 
+				oss_log("OSS: Unknown message command %d from process %ld\n",
+					oss_msg.command, oss_msg.mtype);
 		}
 
 		//d. Check for terminated child processes

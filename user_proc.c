@@ -30,6 +30,8 @@ SimulatedClock *simClock;
 int shmid;
 int msqid;
 volatile sig_atomic_t terminating = 0;
+int myResources[NUM_RESOURCES] = {0};
+
 
 void handle_sigterm(int sig) {
 	terminating = 1;
@@ -98,6 +100,38 @@ bool send_message(int command, int resourceId) {
 		return response.status == 1;
 	}	
 	return true;  
+}
+
+void cleanup_resources() {
+	// Release all held resources
+	for (int i = 0; i < NUM_RESOURCES; i++) {
+		while (myResources[i] > 0) {
+			struct oss_message msg;
+			msg.mtype = getpid();
+			msg.command = RELEASE_RESOURCE;
+			msg.resourceId = i;
+			
+			// Don't wait for response during cleanup
+			if (msgsnd(msqid, &msg, sizeof(struct oss_message) - sizeof(long), IPC_NOWAIT) == -1) {
+				if (errno != EAGAIN) {  // Ignore if message queue is full
+					perror("msgsnd cleanup");
+				}
+			}
+			myResources[i]--;
+		}
+	}
+	
+	// Send final terminate message
+	struct oss_message msg;
+	msg.mtype = getpid();
+	msg.command = TERMINATE;
+	msg.resourceId = 0;
+	
+	if (msgsnd(msqid, &msg, sizeof(struct oss_message) - sizeof(long), IPC_NOWAIT) == -1) {
+		if (errno != EAGAIN) {
+			perror("msgsnd terminate");
+		}
+	}
 }
 
 int main(int argc, char *argv[]) {
@@ -216,13 +250,7 @@ int main(int argc, char *argv[]) {
 	
 	// Final cleanup if terminated by signal
 	if (terminating) {
-		for (int i = 0; i < NUM_RESOURCES; i++) {
-			while (myResources[i] > 0) {
-				if (send_message(RELEASE_RESOURCE, i)) {
-					myResources[i]--;
-				}
-			}
-		}
+		cleanup_resources();
 	}
 
 	detach_shared_memory();
