@@ -60,6 +60,25 @@ void detach_shared_memory() {
 	}
 }
 
+// Function to safely send a message and wait for response
+bool send_message(int command, int resourceId) {
+	struct oss_message msg;
+	memset(&msg, 0, sizeof(struct oss_message));
+	msg.mtype = getpid();
+	msg.command = command;
+	msg.resourceId = resourceId;
+
+	if (msgsnd(msqid, &msg, sizeof(struct oss_message) - sizeof(long), 0) == -1) {
+		return false;
+	}
+
+	struct worker_message response;
+	memset(&response, 0, sizeof(struct worker_message));
+	if (msgrcv(msqid, &response, sizeof(struct worker_message) - sizeof(long), getpid(), 0) == -1) {
+		return false;
+	}
+
+	return response.status == 1;
 int main(int argc, char *argv[]) {
 	signal(SIGTERM, handle_sigterm);
 	
@@ -85,7 +104,7 @@ int main(int argc, char *argv[]) {
 	msqid = msgget(MSGKEY, 0);
 	if (msqid == -1) {
 		perror("msgget");
-		shmdt(simClock);
+		detach_shared_memory();
 		return 1;
 	}
 
@@ -96,14 +115,12 @@ int main(int argc, char *argv[]) {
 	unsigned int last_check_sec = start_sec;
 	unsigned int last_check_ns = start_ns;
 	int total_requests = 0; //track total request made
+	int consecutive_denials = 0;
 
 	//Main process loop
 	while (1) {
 		//Sleep for a shorter time to be more active
-		usleep(rand() % (bound_B / 3));
-
-		//b. Randomly decide to request or release a resource
-		int action = rand() % 2; // 0 for request, 1 for release
+		usleep(rand() % bound_B);
 
 		// Get current time
 		unsigned int curr_sec = simClock->seconds;
@@ -112,13 +129,10 @@ int main(int argc, char *argv[]) {
 		bool can_terminate = (curr_sec > start_sec + 1) || 
 						   (curr_sec == start_sec + 1 && curr_ns >= start_ns);
 
-		// Check if we have any resources
-		bool has_resources = false;
+		//Count total resources held
+		int total_held = 0;
 		for (int i = 0; i < NUM_RESOURCES; i++) {
-			if (myResources[i] > 0) {
-				has_resources = true;
-				break;
-			}
+			total_held += myResources[i];
 		}
 
 		//Check for temination every 250ms
@@ -131,66 +145,49 @@ int main(int argc, char *argv[]) {
 			
 			
 			
-			if (can_terminate && total_requests >= 5 && !has_resources && (rand() % 100 < 20)) {
-				struct oss_message msg;
-				memset(&msg, 0, sizeof(msg));
-				msg.mtype = getpid();
-				msg.command = TERMINATE;
-				
-				if (msgsnd(msqid, &msg, sizeof(msg) - sizeof(long), 0) != -1) {
-					struct worker_message response;
-					memset(&response, 0, sizeof(response));
-					if (msgrcv(msqid, &response, sizeof(response) - sizeof(long), getpid(), 0) != -1) {
-						break;
+			// Consider termination if we've made enough requests
+			if (can_terminate && (total_requests >= 5 || consecutive_denials >= 3)) {
+				// Release all resources first
+				for (int i = 0; i < NUM_RESOURCES; i++) {
+					while (myResources[i] > 0) {
+						if (send_message(RELEASE_RESOURCE, i)) {
+							myResources[i]--;
+						}
 					}
+				}		
+				// Then send terminate message
+				if (send_message(TERMINATE, 0)) {
+					break;
 				}
 			}
 		}
 
-		// Randomly choose between requesting and releasing
-		if (rand() % 100 < 80) {  // 80% chance to request
-			// Request 1-2 resources at a time
-			int num_requests = (rand() % 2) + 1;
-			for (int i = 0; i < num_requests && total_requests < 20; i++) {
-				int resourceId = rand() % NUM_RESOURCES;
-				if (myResources[resourceId] < (NUM_INSTANCES / 3)) {  // Limit to 1/3 of instances
-					struct oss_message msg;
-					memset(&msg, 0, sizeof(msg));
-					msg.mtype = getpid();
-					msg.command = REQUEST_RESOURCE;
-					msg.resourceId = resourceId;
+		// Request or release resources
+		  if (total_held < 3 && total_requests < 15 && consecutive_denials < 3) {
+			// Try to request a resource
+			int resourceId = rand() % NUM_RESOURCES;
+			if (myResources[resourceId] < 2) {  // Maximum 2 of any resource
+				if (send_message(REQUEST_RESOURCE, resourceId)) {
+					myResources[resourceId]++;
+					consecutive_denials = 0;
 					total_requests++;
-					
-					if (msgsnd(msqid, &msg, sizeof(msg) - sizeof(long), 0) != -1) {
-						struct worker_message response;
-						memset(&response, 0, sizeof(response));
-						if (msgrcv(msqid, &response, sizeof(response) - sizeof(long), getpid(), 0) != -1) {
-							if (response.status == 1) {
-								myResources[resourceId]++;
-							}
-						}
-					}
+				} else {
+					consecutive_denials++;
 				}
 			}
-		} else if (has_resources) {  // 20% chance to release if we have resources
-			// Release 1 resource at a time
-			for (int resourceId = 0; resourceId < NUM_RESOURCES; resourceId++) {
-				if (myResources[resourceId] > 0 && (rand() % 100 < 50)) {  // 50% chance to release each held resource
-					struct oss_message msg;
-					memset(&msg, 0, sizeof(msg));
-					msg.mtype = getpid();
-					msg.command = RELEASE_RESOURCE;
-					msg.resourceId = resourceId;
-					
-					if (msgsnd(msqid, &msg, sizeof(msg) - sizeof(long), 0) != -1) {
-						myResources[resourceId]--;
-					}
+		} else if (total_held > 0) {
+			// Release a random held resource
+			int resourceId = rand() % NUM_RESOURCES;
+			if (myResources[resourceId] > 0) {
+				if (send_message(RELEASE_RESOURCE, resourceId)) {
+					myResources[resourceId]--;
+					consecutive_denials = 0;
 				}
 			}
 		}
 	}
 
-	shmdt(simClock);
+	detach_shared_memory();
 	return 0;
 }
 
