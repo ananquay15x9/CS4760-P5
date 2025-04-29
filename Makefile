@@ -8,7 +8,7 @@ OSS_TARGET = oss
 USER_PROC_TARGET = user_proc 
 
 OSS_OBJS = oss.o
-USER_PROC_OBJS = user.proc.o
+USER_PROC_OBJS = user_proc.o
 
 all: $(OSS_TARGET) $(USER_PROC_TARGET)
 

@@ -61,7 +61,7 @@ FILE *logfile = NULL;
 
 // Add new global variables
 int maxProcesses = 18;  // Maximum number of processes
-int maxRuntimeSeconds = 5;  // Maximum runtime in seconds
+int maxRuntimeSeconds = 15;  // Maximum runtime in seconds
 int launchIntervalMs = DEFAULT_LAUNCH_INTERVAL_MS;  // Launch interval in milliseconds
 
 
