@@ -472,9 +472,11 @@ void printProcessTable() {
 
 	for (int i = 0; i < 18; i++) {
 		if (processTable[i].pid != 0) {
-			oss_log("P%d", processTable[i].pid);
+			oss_log("P%d", i);
 			for (int j = 0; j < NUM_RESOURCES; j++) {
-				oss_log("%2d ", allocation[i][j]);
+				if (j >= 0 && j < NUM_RESOURCES) {
+					oss_log("%2d ", allocation[i][j]);
+				}
 			}
 			oss_log("\n");
 		}
