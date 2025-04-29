@@ -203,12 +203,8 @@ void handleResourceRelease(int pid, int resourceId) {
 int send_message_to_worker(pid_t worker_pid, int status) {
 	struct worker_message worker_response;
 	worker_response.mtype = worker_pid; //Child's PID
-    	worker_response.status = 1; //granted or terminated OK
-
-	//msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0);
-
+    	worker_response.status = status; //1 = success, 0 = deny
 	if (msgsnd(msqid, &worker_response, sizeof(worker_response) - sizeof(long), 0) == -1) {
-	printf("OSS sending: mtype=%ld, status=%d\n", worker_response.mtype, worker_response.status);
 		perror("msgsnd (response to worker)");
 		return -1;
 	}
